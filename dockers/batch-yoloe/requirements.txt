@@ -1,0 +1,12 @@
+# torch 2.13.0 / torchvision 0.28.0 are installed by the Dockerfile first, CPU or CUDA build
+# depending on its TORCH_VARIANT build arg (onnxruntime is swapped for onnxruntime-gpu on CUDA)
+ultralytics==8.4.137
+onnx==1.22.0
+onnxruntime==1.29.0
+opencv-python-headless==5.0.0.93
+numpy==2.5.1
+flask==3.1.3
+requests==2.34.2
+onnxslim==0.1.96
+# tokenizer for the text-prompt encoder; a zip URL so the image needs no git
+clip @ https://github.com/ultralytics/CLIP/archive/refs/heads/main.zip

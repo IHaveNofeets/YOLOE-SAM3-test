@@ -1,0 +1,147 @@
+name: cv
+
+services:
+  webpage:
+    build:
+      context: ./dockers/webpage
+    ports:
+      - "7860:7860"
+    volumes:
+      - ./dockers/yoloe/modelData/currentModels:/app/modelData/currentModels
+      - ./assets:/app/assets
+    environment:
+      - YOLOE_SERVICE_URL=http://yoloe:8600
+      - SAM3_SERVICE_URL=http://sam3:8700
+      - YOLORET_SERVICE_URL=http://yoloret:8500
+      - CLASSICAL_SERVICE_URL=http://classical:8800
+      - REFERENCE_SERVICE_URL=http://reference:8900
+    depends_on:
+      yoloe:
+        condition: service_healthy
+      sam3:
+        condition: service_healthy
+      yoloret:
+        condition: service_healthy
+      classical:
+        condition: service_healthy
+      reference:
+        condition: service_healthy
+    networks:
+      - yoloe-net
+
+  compare:
+    build:
+      context: ./dockers/compare
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./assets:/app/assets
+    environment:
+      - YOLOE_SERVICE_URL=http://yoloe:8600
+      - SAM3_SERVICE_URL=http://sam3:8700
+      - CLASSICAL_SERVICE_URL=http://classical:8800
+    depends_on:
+      yoloe:
+        condition: service_healthy
+      sam3:
+        condition: service_healthy
+      classical:
+        condition: service_healthy
+    networks:
+      - yoloe-net
+
+  batch-yoloe:
+    build:
+      context: ./dockers/batch-yoloe
+    ports:
+      - "7870:7870"
+    volumes:
+      - ./dockers/batch-yoloe/modelData/yoloe:/app/modelData/yoloe:rw
+      - ./dockers/batch-yoloe/modelData/models:/app/models:rw
+      # the labelled dataset (trainImages / testImages / refImages); only output/YOLOE/ is written to.
+      # Point it elsewhere with DATASET_ROOT in a .env file next to compose.yaml.
+      - ${DATASET_ROOT:-E:/Dataset}:/data:rw
+    # fine-tuning's data loader workers share batches through /dev/shm (Docker's default 64 MB is too small)
+    shm_size: "2gb"
+    environment:
+      - MAX_PARALLEL=8
+      # other people's detectors, in their own containers. Not required: if a service isn't running
+      # the batch page simply doesn't list it. Start them with: docker compose up -d yoloret sam3
+      - YOLORET_SERVICE_URL=http://yoloret:8500
+      - SAM3_SERVICE_URL=http://sam3:8700
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:7870/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 60s
+    networks:
+      - yoloe-net
+
+  yoloe:
+    build:
+      context: ./dockers/yoloe
+    volumes:
+      - ./dockers/yoloe/modelData/currentModels:/app/modelData/currentModels:rw
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8600/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 20s
+    networks:
+      - yoloe-net
+
+  sam3:
+    build:
+      context: ./dockers/sam3
+    volumes:
+      - ./dockers/sam3/modelData/sam3:/app/modelData/sam3:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8700/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 20s
+    networks:
+      - yoloe-net
+
+  yoloret:
+    build:
+      context: ./dockers/yoloret
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8500/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 30s
+    networks:
+      - yoloe-net
+
+  classical:
+    build:
+      context: ./dockers/classical
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8800/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    networks:
+      - yoloe-net
+
+  reference:
+    build:
+      context: ./dockers/reference
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8900/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    networks:
+      - yoloe-net
+
+networks:
+  yoloe-net:
+    driver: bridge
