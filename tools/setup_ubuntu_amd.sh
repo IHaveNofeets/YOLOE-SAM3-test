@@ -11,7 +11,7 @@
 #   4. adds you to the docker / render / video groups
 #   5. writes .env next to compose.yaml: DATASET_ROOT, the render / video group ids, and
 #      HSA_OVERRIDE_GFX_VERSION when the GPU needs it (e.g. RX 6750 XT = gfx1031 -> 10.3.0);
-#      copies SAM 3's weights to dockers/batch-sam3/modelData/sam3 from dockers/sam3 if they are missing
+#      checks that SAM 3's weights are in dockers/batch-sam3/modelData/sam3 (copy sam3.pt there yourself)
 #   6. builds and starts batch-yoloe (port 7870) and batch-sam3 (port 7871) with compose.amd.yaml
 #   7. checks that PyTorch inside both containers sees the GPU and can compute on it
 #
@@ -188,14 +188,9 @@ info "DATASET_ROOT=$DATASET  RENDER_GID=$RENDER_GID  VIDEO_GID=$VIDEO_GID  HSA_O
 
 # SAM 3's weights: batch-sam3 has its own copy (the download is gated on Hugging Face, so nothing fetches it)
 SAM3_PT="$REPO/dockers/batch-sam3/modelData/sam3/sam3.pt"
-SAM3_SRC="$REPO/dockers/sam3/modelData/sam3/sam3.pt"
 SAM3_OK=1
 if [ -f "$SAM3_PT" ]; then
   info "SAM 3 weights: $SAM3_PT"
-elif [ -f "$SAM3_SRC" ]; then
-  mkdir -p "$(dirname "$SAM3_PT")"
-  info "copying SAM 3 weights (3.4 GB) from dockers/sam3 to dockers/batch-sam3..."
-  cp "$SAM3_SRC" "$SAM3_PT"
 else
   SAM3_OK=0
   warn "SAM 3 weights not found: put sam3.pt in $(dirname "$SAM3_PT")/ (batch-sam3 starts, but can't run until then)"

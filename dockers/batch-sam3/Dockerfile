@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends libxcb1 \
 ARG TORCH_VARIANT=cpu
 
 COPY requirements.txt .
-# Same headless-OpenCV dance as dockers/yoloe: ultralytics drags in the GUI build as a dependency.
+# Headless OpenCV: ultralytics drags in the GUI build as a dependency, so it is swapped out at the end.
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install torch==2.13.0+${TORCH_VARIANT} torchvision==0.28.0+${TORCH_VARIANT} \
         --index-url https://download.pytorch.org/whl/${TORCH_VARIANT} \

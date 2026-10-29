@@ -614,7 +614,7 @@ def _save_model(name, exported_path, meta, extra_files=()):
 def _export_with_embeddings(tmp_dir, set_prompts):
     """Copy the base weights into tmp_dir (export() writes next to the weights file), let
     set_prompts(model) bake class embeddings in, then save/reload them and export to ONNX - the
-    same sequence as dockers/yoloe/service.py. Returns (onnx path, prompt.npz path, set_prompts' result)."""
+    sequence that keeps the embeddings in the exported model. Returns (onnx path, prompt.npz path, set_prompts' result)."""
     weights = os.path.join(tmp_dir, os.path.basename(BASE_WEIGHTS))
     shutil.copy(BASE_WEIGHTS, weights)
     prompt_path = os.path.join(tmp_dir, "prompt.npz")
