@@ -1,0 +1,10 @@
+tensorflow==2.10.1
+protobuf<3.20
+numpy==1.23.5
+opencv-python==4.8.1.78
+pillow
+absl-py
+tqdm
+pyyaml
+neural_structured_learning
+flask
