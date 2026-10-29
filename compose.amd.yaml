@@ -1,30 +1,46 @@
-# AMD GPU override for the batch-yoloe service, for a Linux host (ROCm does not reach containers on Windows).
+# AMD GPU override for the batch-yoloe and batch-sam3 services, for a Linux host (ROCm does not reach
+# containers on Windows).
 #
-#   docker compose -f compose.yaml -f compose.amd.yaml up -d --build batch-yoloe
+#   docker compose -f compose.yaml -f compose.amd.yaml up -d --build batch-yoloe batch-sam3
 #
-# Builds ROCm PyTorch into the image: fine-tuning runs on the AMD GPU, inference (tests) stays on the
-# CPU's ONNX Runtime. tools/setup_ubuntu_amd.sh sets up the host and writes RENDER_GID / VIDEO_GID /
-# DATASET_ROOT into .env next to this file.
+# Builds ROCm PyTorch into the images. batch-yoloe: fine-tuning runs on the AMD GPU, inference (tests)
+# stays on the CPU's ONNX Runtime. batch-sam3: SAM 3 runs in PyTorch, so tests and prompt tuning both run
+# on the GPU. tools/setup_ubuntu_amd.sh sets up the host and writes RENDER_GID / VIDEO_GID / DATASET_ROOT
+# into .env next to this file.
+x-rocm: &rocm
+  devices:
+    - /dev/kfd  # ROCm compute
+    - /dev/dri  # the GPU itself
+  group_add:
+    # the host's render / video group ids (the names don't exist inside the container)
+    - "${RENDER_GID:?run tools/setup_ubuntu_amd.sh first (it writes RENDER_GID into .env)}"
+    - "${VIDEO_GID:?run tools/setup_ubuntu_amd.sh first (it writes VIDEO_GID into .env)}"
+  security_opt:
+    - seccomp=unconfined  # ROCm needs some syscalls Docker's default profile blocks
+
+x-rocm-env: &rocm-env
+  - MIOPEN_USER_DB_PATH=/app/modelData/miopen/db
+  - MIOPEN_CUSTOM_CACHE_DIR=/app/modelData/miopen/cache
+  # The RX 6750 XT (gfx1031) is not on ROCm's official list; it runs as the near-identical,
+  # supported gfx1030 (RX 6800/6900). Set by the setup script from the GPU it finds; empty = off.
+  - HSA_OVERRIDE_GFX_VERSION=${HSA_OVERRIDE_GFX_VERSION:-}
+
 services:
   batch-yoloe:
+    <<: *rocm
     build:
       args:
         TORCH_VARIANT: rocm7.2
-    devices:
-      - /dev/kfd  # ROCm compute
-      - /dev/dri  # the GPU itself
-    group_add:
-      # the host's render / video group ids (the names don't exist inside the container)
-      - "${RENDER_GID:?run tools/setup_ubuntu_amd.sh first (it writes RENDER_GID into .env)}"
-      - "${VIDEO_GID:?run tools/setup_ubuntu_amd.sh first (it writes VIDEO_GID into .env)}"
-    security_opt:
-      - seccomp=unconfined  # ROCm needs some syscalls Docker's default profile blocks
     volumes:
       # MIOpen compiles its GPU kernels on first use (minutes); keep them across container rebuilds
       - ./dockers/batch-yoloe/modelData/miopen:/app/modelData/miopen:rw
-    environment:
-      - MIOPEN_USER_DB_PATH=/app/modelData/miopen/db
-      - MIOPEN_CUSTOM_CACHE_DIR=/app/modelData/miopen/cache
-      # The RX 6750 XT (gfx1031) is not on ROCm's official list; it runs as the near-identical,
-      # supported gfx1030 (RX 6800/6900). Set by the setup script from the GPU it finds; empty = off.
-      - HSA_OVERRIDE_GFX_VERSION=${HSA_OVERRIDE_GFX_VERSION:-}
+    environment: *rocm-env
+
+  batch-sam3:
+    <<: *rocm
+    build:
+      args:
+        TORCH_VARIANT: rocm7.2
+    volumes:
+      - ./dockers/batch-sam3/modelData/miopen:/app/modelData/miopen:rw
+    environment: *rocm-env

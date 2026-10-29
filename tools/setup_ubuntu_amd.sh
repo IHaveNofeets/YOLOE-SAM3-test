@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Set up an Ubuntu PC with an AMD Radeon GPU to run the YOLOE batch-yoloe container with GPU training.
+# Set up an Ubuntu PC with an AMD Radeon GPU to run the batch-yoloe and batch-sam3 containers on the GPU.
 #
 #   bash tools/setup_ubuntu_amd.sh --dataset /path/to/Dataset
 #
@@ -10,14 +10,15 @@
 #   3. makes sure the AMD kernel driver exposes ROCm (/dev/kfd); installs AMD's amdgpu-dkms only if not
 #   4. adds you to the docker / render / video groups
 #   5. writes .env next to compose.yaml: DATASET_ROOT, the render / video group ids, and
-#      HSA_OVERRIDE_GFX_VERSION when the GPU needs it (e.g. RX 6750 XT = gfx1031 -> 10.3.0)
-#   6. builds and starts the batch-yoloe container with compose.amd.yaml (ROCm PyTorch)
-#   7. checks that PyTorch inside the container sees the GPU and can compute on it
+#      HSA_OVERRIDE_GFX_VERSION when the GPU needs it (e.g. RX 6750 XT = gfx1031 -> 10.3.0);
+#      copies SAM 3's weights to dockers/batch-sam3/modelData/sam3 from dockers/sam3 if they are missing
+#   6. builds and starts batch-yoloe (port 7870) and batch-sam3 (port 7871) with compose.amd.yaml
+#   7. checks that PyTorch inside both containers sees the GPU and can compute on it
 #
 # Options:
 #   --dataset PATH     the dataset root (has trainImages/, testImages/, refImages/); required the first time
 #   --amdgpu-dkms      install AMD's amdgpu-dkms driver even if the built-in kernel driver works
-#   --no-start         set everything up but don't build / start the container
+#   --no-start         set everything up but don't build / start the containers
 #   -h, --help         this text
 set -euo pipefail
 
@@ -27,7 +28,7 @@ info() { printf '   %s\n' "$*"; }
 warn() { printf '\033[33m!! %s\033[0m\n' "$*" >&2; }
 die() { printf '\033[31mxx %s\033[0m\n' "$*" >&2; exit 1; }
 
-usage() { sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
+usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0; }
 
 DATASET=""
 FORCE_DKMS=0
@@ -152,12 +153,14 @@ bold "5/7  Settings in $ENV_FILE"
 [ -n "$DATASET" ] || die "give the dataset root with --dataset /path/to/Dataset"
 DATASET="$(cd "$DATASET" 2>/dev/null && pwd)" || die "dataset folder not found: $DATASET"
 [ -d "$DATASET/trainImages" ] || [ -d "$DATASET/testImages" ] || die "$DATASET has no trainImages/ or testImages/"
-mkdir -p "$DATASET/output/YOLOE" 2>/dev/null || true
-if ! touch "$DATASET/output/YOLOE/.write_test" 2>/dev/null; then
-  die "can't write to $DATASET/output/YOLOE. If the dataset is on the Windows (NTFS) drive: turn off Windows Fast Startup
+for out in YOLOE SAM3; do
+  mkdir -p "$DATASET/output/$out" 2>/dev/null || true
+  if ! touch "$DATASET/output/$out/.write_test" 2>/dev/null; then
+    die "can't write to $DATASET/output/$out. If the dataset is on the Windows (NTFS) drive: turn off Windows Fast Startup
    and shut Windows down fully, then mount the drive read-write (e.g. in /etc/fstab with the ntfs3 driver, uid=$(id -u),gid=$(id -g))"
-fi
-rm -f "$DATASET/output/YOLOE/.write_test"
+  fi
+  rm -f "$DATASET/output/$out/.write_test"
+done
 
 # which gfx target the GPU is; RDNA2 cards other than gfx1030 (RX 6800/6900) run as gfx1030
 GFX=""
@@ -183,11 +186,27 @@ set_env VIDEO_GID "$VIDEO_GID"
 set_env HSA_OVERRIDE_GFX_VERSION "$OVERRIDE"
 info "DATASET_ROOT=$DATASET  RENDER_GID=$RENDER_GID  VIDEO_GID=$VIDEO_GID  HSA_OVERRIDE_GFX_VERSION=${OVERRIDE:-(none)}"
 
+# SAM 3's weights: batch-sam3 has its own copy (the download is gated on Hugging Face, so nothing fetches it)
+SAM3_PT="$REPO/dockers/batch-sam3/modelData/sam3/sam3.pt"
+SAM3_SRC="$REPO/dockers/sam3/modelData/sam3/sam3.pt"
+SAM3_OK=1
+if [ -f "$SAM3_PT" ]; then
+  info "SAM 3 weights: $SAM3_PT"
+elif [ -f "$SAM3_SRC" ]; then
+  mkdir -p "$(dirname "$SAM3_PT")"
+  info "copying SAM 3 weights (3.4 GB) from dockers/sam3 to dockers/batch-sam3..."
+  cp "$SAM3_SRC" "$SAM3_PT"
+else
+  SAM3_OK=0
+  warn "SAM 3 weights not found: put sam3.pt in $(dirname "$SAM3_PT")/ (batch-sam3 starts, but can't run until then)"
+fi
+
 # ----------------------------------------------------------------------------- 6. build + start
+SERVICES=(batch-yoloe batch-sam3)
 COMPOSE=(sudo docker compose --project-directory "$REPO" -f "$REPO/compose.yaml" -f "$REPO/compose.amd.yaml")
 if [ "$START" = 0 ]; then
   bold "6/7  Skipped (--no-start). Start later with:"
-  info "cd $REPO && docker compose -f compose.yaml -f compose.amd.yaml up -d --build batch-yoloe"
+  info "cd $REPO && docker compose -f compose.yaml -f compose.amd.yaml up -d --build ${SERVICES[*]}"
 else
   if [ "$NEED_REBOOT" = 1 ]; then
     bold "6/7  Reboot needed first"
@@ -195,18 +214,24 @@ else
     exit 0
   fi
   [ -e /dev/kfd ] || die "/dev/kfd still missing - reboot, or run again with --amdgpu-dkms"
-  bold "6/7  Building and starting the batch-yoloe container (the first build downloads ~5 GB of ROCm PyTorch)"
-  "${COMPOSE[@]}" up -d --build batch-yoloe
-  info "waiting for it to answer..."
-  for _ in $(seq 1 120); do
-    curl -sf http://localhost:7870/health >/dev/null && break
-    sleep 3
+  bold "6/7  Building and starting ${SERVICES[*]} (the first build downloads ~5 GB of ROCm PyTorch)"
+  "${COMPOSE[@]}" up -d --build "${SERVICES[@]}"
+  info "waiting for them to answer..."
+  for port in 7870 7871; do
+    # any HTTP answer counts as started (batch-sam3's /health says 503 while its weights are missing)
+    for _ in $(seq 1 120); do
+      curl -s -o /dev/null http://localhost:$port/health && break
+      sleep 3
+    done
+    curl -s -o /dev/null http://localhost:$port/health \
+      || die "the container on port $port did not start; see: ${COMPOSE[*]} logs ${SERVICES[*]}"
   done
-  curl -sf http://localhost:7870/health >/dev/null || die "the container did not start; see: ${COMPOSE[*]} logs batch-yoloe"
 
   # --------------------------------------------------------------------------- 7. check the GPU
-  bold "7/7  Checking the GPU inside the container"
-  if "${COMPOSE[@]}" exec -T batch-yoloe python -c "
+  bold "7/7  Checking the GPU inside the containers"
+  for svc in "${SERVICES[@]}"; do
+    info "$svc:"
+    if "${COMPOSE[@]}" exec -T "$svc" python -c "
 import torch, sys
 ok = torch.cuda.is_available()
 print('   ROCm PyTorch:', torch.__version__, '| HIP', torch.version.hip, '| GPU available:', ok)
@@ -218,13 +243,17 @@ b = (a @ a).sum().item()
 torch.cuda.synchronize()
 print('   a test computation on the GPU worked')
 "; then
-    info "OK"
-  else
-    warn "PyTorch in the container can't use the GPU. Check: 'ls -l /dev/kfd /dev/dri', the HSA_OVERRIDE_GFX_VERSION"
-    warn "in $ENV_FILE, and the container log (${COMPOSE[*]} logs batch-yoloe). Training will run on the CPU meanwhile."
-  fi
-  curl -s http://localhost:7870/api/models | grep -o '"device":"[^"]*"' | sed 's/^/   page reports /' || true
-  info "open http://localhost:7870"
+      info "OK"
+    else
+      warn "PyTorch in $svc can't use the GPU. Check: 'ls -l /dev/kfd /dev/dri', the HSA_OVERRIDE_GFX_VERSION"
+      warn "in $ENV_FILE, and the container log (${COMPOSE[*]} logs $svc). It runs on the CPU meanwhile."
+    fi
+  done
+  for port in 7870 7871; do
+    curl -s http://localhost:$port/api/models | grep -o '"device":"[^"]*"' | sed "s/^/   :$port reports /" || true
+  done
+  info "open http://localhost:7870 (YOLOE) and http://localhost:7871 (SAM 3)"
+  [ "$SAM3_OK" = 1 ] || warn "batch-sam3 still needs sam3.pt in $(dirname "$SAM3_PT")/"
 fi
 
 if [ "$NEED_RELOGIN" = 1 ]; then
@@ -232,4 +261,4 @@ if [ "$NEED_RELOGIN" = 1 ]; then
   info "so your new group memberships apply; after that 'docker' works without sudo."
 fi
 bold "Done"
-info "Start / update later:  cd $REPO && docker compose -f compose.yaml -f compose.amd.yaml up -d --build batch-yoloe"
+info "Start / update later:  cd $REPO && docker compose -f compose.yaml -f compose.amd.yaml up -d --build ${SERVICES[*]}"

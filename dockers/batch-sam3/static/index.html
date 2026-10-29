@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SAM 3 Dataset</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header><h1>SAM 3 Dataset</h1><span id="serverInfo" class="muted"></span></header>
+
+<div id="jobBar" class="jobbar" hidden>
+  <div class="row">
+    <b id="jobTitle"></b>
+    <progress id="jobProgress" value="0" max="1"></progress>
+    <span id="jobMsg" class="muted small"></span>
+    <button id="jobCancel">Cancel</button>
+    <button id="jobLogToggle">Log</button>
+    <button id="jobQueueToggle">Queue</button>
+    <button id="jobHide" title="Hide until something new is added">✕</button>
+  </div>
+  <pre id="jobLog" hidden></pre>
+  <div id="jobQueue" class="jobqueue" hidden></div>
+</div>
+
+<section>
+  <h2>1. Dataset</h2>
+  <div id="dsInfo" class="muted">Loading…</div>
+  <div id="dsTable" class="scrollx"></div>
+</section>
+
+<section>
+  <h2>2. Build a model</h2>
+  <div class="form">
+    <div class="row">
+      <label>Kind <select id="bKind">
+        <option value="text">Text prompt</option>
+        <option value="exemplar">Exemplar prompt (ref crops beside each image)</option>
+        <option value="visual">Visual prompt (ref tokens, no concat)</option>
+        <option value="prompt_tune">Prompt tuning (learn tokens on trainImages)</option>
+      </select></label>
+      <label>Name <input id="bName" type="text" size="28"></label>
+    </div>
+    <div class="row">
+      <label><input type="radio" name="bScope" value="single" checked> One class in one dataset</label>
+      <select id="bDataset"></select>
+      <select id="bClass"></select>
+      <label><input type="radio" name="bScope" value="all"> All classes (not "Other"), all datasets</label>
+    </div>
+    <div class="row" id="bFlagsRow">
+      <span class="muted">Use flagged objects for building:</span>
+      <label><input id="bIncU" type="checkbox"> include <b>uncompleted</b></label>
+      <label><input id="bIncC" type="checkbox"> include <b>covered</b></label>
+      <span class="muted small">(they are always part of the test ground truth)</span>
+    </div>
+
+    <div id="optText" class="opts">
+      <div class="muted small">One box per class. Each line is a prompt for that class: the class name plus any other names for it.
+        A detection by any of them counts as the class.</div>
+      <div id="bPrompts" class="prompts"></div>
+      <div class="row"><label>Copy prompts from <select id="bCopyFrom"><option value="">–</option></select></label></div>
+    </div>
+    <div id="optExemplar" class="opts" hidden>
+      <div class="muted small">Crops of the reference objects are packed into a panel that is pasted to the left of every test image:
+        SAM 3 then finds objects like them in "the same image". Matches on the panel itself are dropped.</div>
+      <div class="row">
+        <label>Exemplars per class <input id="bMaxEx" type="number" min="1" max="20" value="4"></label>
+        <label title="One-class model: other classes' objects from the reference images are added as negative examples. All-classes model: each class gets the other classes' crops as negatives.">
+          <input id="bNeg" type="checkbox"> use other classes as <b>negative</b> exemplars</label>
+      </div>
+    </div>
+    <div id="optVisual" class="opts" hidden>
+      <div class="muted small">Every allowed reference object is encoded once, on its reference image, into prompt tokens that are stored with
+        the model and used on the test images directly. Faster than exemplars (no panel), but experimental:
+        SAM 3 was trained with the exemplar on the image it searches.</div>
+    </div>
+    <div id="optBoxText" class="opts" hidden>
+      <label><input id="bWithText" type="checkbox"> add the <b>class name</b> as text to the boxes
+        <span class="muted small">(otherwise SAM 3's default word "visual")</span></label>
+      <div id="bRefInfo" class="muted small"></div>
+    </div>
+    <div id="optTune" class="opts" hidden>
+      <div class="muted small">SAM 3 stays frozen; a few prompt tokens per class are learned on trainImages, after the starting text below.
+        Practical on a GPU; on a CPU expect about a minute per training image in the first epoch (features are cached after that).</div>
+      <div class="row">
+        <label>Epochs <input id="bEpochs" type="number" min="1" max="200" value="10"></label>
+        <label>Tokens per class <input id="bTokens" type="number" min="1" max="32" value="4"></label>
+        <label>Learning rate <input id="bLr" type="number" min="0.00001" max="1" step="0.0005" value="0.005"></label>
+      </div>
+      <div class="row">
+        <label>Train images <input id="bMaxImages" type="number" min="0" step="1" placeholder="all" size="7"></label>
+        <label>Seed <input id="bSeed" type="number" min="0" step="1" value="0" size="5"></label>
+        <span class="muted small">picked at random with the seed; empty or 0 = all. The same number and seed always give the same images.</span>
+      </div>
+      <div class="muted small">Starting text per class:</div>
+      <div id="bStart" class="prompts"></div>
+      <div id="bTrainInfo" class="muted small"></div>
+    </div>
+    <div class="row"><button id="bBuild" class="primary">Build</button><span id="bMsg" class="small"></span></div>
+  </div>
+</section>
+
+<section>
+  <div class="row"><h2>3. Models</h2>
+    <a class="btn" href="/api/models/download.zip" download title="Every model: exemplar panel and reference images with boxes, prompts or training summary, plus meta.json">Download all (.zip)</a></div>
+  <div id="modelList" class="models"></div>
+</section>
+
+<section>
+  <h2>4. Test</h2>
+  <p class="muted small">Each model runs on the test images of its own scope (one dataset for a one-class model, every dataset for all classes),
+    one model at a time so the times are real. All detections are kept, so the confidence is chosen afterwards with the slider.
+    Results go to <code>output/SAM3/</code> in the dataset root.</p>
+  <div class="row"><span>Models:</span><span id="tModels" class="checks"></span></div>
+  <div class="row">
+    <label>Name <input id="tName" type="text" size="24" placeholder="optional"></label>
+    <label title="For a quick look on a slow machine: only the first N test images of each model's scope">Test images
+      <input id="tMax" type="number" min="0" step="1" placeholder="all" size="6"></label>
+    <button id="tRun" class="primary">Run test</button><span id="tMsg" class="small"></span>
+  </div>
+
+  <h3>Results</h3>
+  <div class="row">
+    <label>Test <select id="tPick"></select></label>
+    <a id="tCsv" class="btn" href="#" download>metrics.csv</a>
+    <button id="tDelete">Delete test</button>
+  </div>
+  <div id="tBody" hidden>
+    <div class="row slider">
+      <label>Confidence <input id="tConf" type="range" min="0.01" max="0.99" step="0.01" value="0.25"></label>
+      <b id="tConfVal">0.25</b>
+      <span class="muted small">P / R / F1, counts and flagged recall are recomputed live; the images below follow too.</span>
+    </div>
+    <div id="tTable" class="scrollx"></div>
+    <div id="tCharts" class="charts"></div>
+    <div id="tInfo" class="muted small"></div>
+  </div>
+</section>
+
+<section>
+  <h2>5. Images</h2>
+  <div class="row"><span id="viewerInfo" class="muted">Open a test above</span></div>
+  <div id="viewerBody" hidden>
+    <div class="row">
+      <label>Min conf <input id="vConf" type="number" min="0" max="1" step="0.01" value="0.25"></label>
+      <label>Filter <input id="vFilter" type="text" placeholder="path contains…" size="18"></label>
+      <label>Sort <select id="vSort"><option value="path">Path</option><option value="conf">Best conf</option><option value="model">Best match</option><option value="count">Most detections</option></select></label>
+      <label><input id="vOnlyHits" type="checkbox"> Only images with a detection</label>
+      <label><input id="vTruth" type="checkbox" checked> Show ground truth</label>
+      <label><input id="vTpFp" type="checkbox"> Colour by TP / FP</label>
+    </div>
+    <div class="row vfilter"><span>Models:</span><span id="vModels"></span></div>
+    <div id="vSummary"></div>
+    <div id="vGrid" class="vgrid"></div>
+  </div>
+</section>
+
+<div id="vModal" class="modal" hidden>
+  <div class="modal-box">
+    <div class="row modal-head">
+      <button id="vPrev">◀</button><button id="vNext">▶</button>
+      <b id="vModalTitle"></b>
+      <button id="vClose" class="close">✕</button>
+    </div>
+    <div class="modal-content">
+      <canvas id="vModalCanvas"></canvas>
+      <div id="vModalDets"></div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+<script src="/static/viewer.js"></script>
+</body>
+</html>

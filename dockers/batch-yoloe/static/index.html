@@ -79,6 +79,11 @@
         <label>Batch <input id="bBatch" type="number" min="1" max="64" value="4"></label>
         <label>Patience <input id="bPatience" type="number" min="1" max="500" value="20"></label>
       </div>
+      <div class="row">
+        <label>Train images <input id="bMaxImages" type="number" min="0" step="1" placeholder="all" size="7"></label>
+        <label>Seed <input id="bSeed" type="number" min="0" step="1" value="0" size="5"></label>
+        <span class="muted small">picked at random with the seed; empty or 0 = all. The same number and seed always give the same images.</span>
+      </div>
       <div id="bTrainInfo" class="muted small"></div>
     </div>
     <div class="row"><button id="bBuild" class="primary">Build</button><span id="bMsg" class="small"></span></div>

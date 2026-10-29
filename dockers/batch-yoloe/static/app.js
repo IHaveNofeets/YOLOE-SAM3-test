@@ -119,8 +119,10 @@ function renderBuildInfo(scope, kind) {
   const used = objs - (!$("bIncU").checked ? u : 0) - (!$("bIncC").checked ? c : 0); // approximate: an object can be both
   const txt = `${imgs} ${split === "ref" ? "reference" : "training"} image(s), ${objs} in-scope object(s), of which ${u} uncompleted and ${c} covered `
     + `→ about ${Math.max(0, used)} used.`;
-  if (kind === "visual") $("bRefInfo").textContent = txt;
-  else $("bTrainInfo").textContent = txt + " 10% of the training images are held out for validation; test images are never used. "
+  if (kind === "visual") { $("bRefInfo").textContent = txt; return; }
+  const n = +$("bMaxImages").value || 0;
+  const pick = n > 0 && n < imgs ? ` Using ${n} of them (about ${Math.round(used * n / imgs)} objects), picked with seed ${+$("bSeed").value || 0}.` : "";
+  $("bTrainInfo").textContent = txt + pick + " 10% of the training images used are held out for validation; test images are never used. "
     + "Left-out flagged objects are greyed out in the training images.";
 }
 
@@ -153,7 +155,8 @@ async function build() {
   if (kind === "text") body.options.prompts = [...$("bPrompts").querySelectorAll("textarea")]
     .map((ta) => ta.value.split("\n").map((s) => s.trim()).filter(Boolean));
   if (kind === "finetune") Object.assign(body.options, { method: $("bMethod").value, epochs: +$("bEpochs").value,
-    imgsz: +$("bImgsz").value, batch: +$("bBatch").value, patience: +$("bPatience").value });
+    imgsz: +$("bImgsz").value, batch: +$("bBatch").value, patience: +$("bPatience").value,
+    max_images: +$("bMaxImages").value || 0, seed: +$("bSeed").value || 0 });
   $("bMsg").textContent = "";
   try {
     await post("/api/models", body);
@@ -252,8 +255,10 @@ async function loadModels() {
     const flags = m.type === "visual" || m.type === "finetune"
       ? `<div class="small">uncompleted: ${m.include_uncompleted ? "used" : "left out"} · covered: ${m.include_covered ? "used" : "left out"}</div>` : "";
     const tr = m.training;
+    const td = tr?.data;
+    const trainImgs = td?.available_images ? `<div class="small muted">${td.train_images + td.val_images} of ${td.available_images} train images, seed ${td.seed ?? 0}</div>` : "";
     const trainInfo = tr ? `<div class="small muted">${esc(tr.method)} · ${tr.epochs_done}/${tr.epochs} epochs · imgsz ${tr.imgsz}`
-      + `${tr.final_val?.["metrics/mAP50(B)"] != null ? ` · val mAP50 ${f3(tr.final_val["metrics/mAP50(B)"])}` : ""}</div>` : "";
+      + `${tr.final_val?.["metrics/mAP50(B)"] != null ? ` · val mAP50 ${f3(tr.final_val["metrics/mAP50(B)"])}` : ""}</div>${trainImgs}` : "";
     const prompts = m.type === "text" && promptGroups(m).length
       ? `<div class="mpreview">${promptGroups(m).map((g, i) => g.map((p) => `<span class="chip" title="${esc(m.class_names?.[i] ?? "")}">${esc(p)}</span>`).join("")).join("")}</div>` : "";
     const preview = m.type === "visual" ? `<img src="/api/models/${m.name}/preview?t=${encodeURIComponent(m.created)}" alt="">`
@@ -469,6 +474,7 @@ $("bMethod").onchange = () => { $("bEpochs").value = $("bMethod").value === "ful
 for (const el of document.querySelectorAll('input[name="bScope"]')) el.onchange = onFormChange;
 $("bIncU").onchange = onFormChange;
 $("bIncC").onchange = onFormChange;
+$("bMaxImages").oninput = $("bSeed").oninput = onFormChange;
 $("bName").oninput = () => { nameTouched = true; };
 $("bCopyFrom").onchange = copyPrompts;
 $("bBuild").onclick = build;

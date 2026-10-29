@@ -78,6 +78,28 @@ services:
     networks:
       - yoloe-net
 
+  # the same dataset tool for SAM 3 (text, exemplar and visual prompts, prompt tuning), on port 7871.
+  # sam3.pt is not downloaded (gated on Hugging Face): it is a copy in dockers/batch-sam3/modelData/sam3.
+  batch-sam3:
+    build:
+      context: ./dockers/batch-sam3
+    ports:
+      - "7871:7871"
+    volumes:
+      - ./dockers/batch-sam3/modelData/sam3:/app/modelData/sam3:rw
+      - ./dockers/batch-sam3/modelData/models:/app/models:rw
+      # the labelled dataset; only output/SAM3/ is written to
+      - ${DATASET_ROOT:-E:/Dataset}:/data:rw
+    shm_size: "2gb"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:7871/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 60s
+    networks:
+      - yoloe-net
+
   yoloe:
     build:
       context: ./dockers/yoloe

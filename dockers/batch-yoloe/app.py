@@ -714,12 +714,17 @@ def _build_finetune(job, name, spec, class_ids, names, tmp_dir):
     batch = int(o.get("batch") or 4)
     patience = int(o.get("patience") or 20)
     workers = int(o.get("workers") if o.get("workers") is not None else 2)
+    max_images = max(0, int(o.get("max_images") or 0))  # 0 = all of the scope's train images
+    seed = int(o.get("seed") or 0)
     _ensure_asset(TEXT_ENCODER)  # the trainer initialises the class embeddings from the class names
     work = os.path.join(WORK_DIR, name)
     job.say(f"preparing the training data in {work}")
     data_yaml, stats = train.build_yolo_dataset(
         DS, spec["scope"], class_ids, names, spec["include_uncompleted"], spec["include_covered"], work,
-        log=job.say, progress=lambda p, m: job.set(0.1 * p, m), cancelled=job.cancel.is_set)
+        seed=seed, max_images=max_images, log=job.say, progress=lambda p, m: job.set(0.1 * p, m),
+        cancelled=job.cancel.is_set)
+    job.say(f"{stats['train_images'] + stats['val_images']} of {stats['available_images']} train images "
+            f"(seed {seed}): {stats['train_images']} train, {stats['val_images']} val")
     job.say(f"training: {method}, {epochs} epochs, imgsz {imgsz}, batch {batch}, device "
             f"{('GPU ' + GPU_NAME) if TORCH_GPU else 'cpu'}")
     # training and the ONNX export run in a separate process: all their memory is returned when it exits,
@@ -736,7 +741,7 @@ def _build_finetune(job, name, spec, class_ids, names, tmp_dir):
     shutil.rmtree(os.path.join(work, "images"), ignore_errors=True)
     return dst, [(os.path.join(tmp_dir, "best.pt"), "best.pt")], {
         "training": {"method": method, "epochs": epochs, "imgsz": imgsz, "batch": batch, "patience": patience,
-                     "data": stats, **summary}}
+                     "max_images": max_images, "seed": seed, "data": stats, **summary}}
 
 
 BUILDERS = {"visual": _build_visual, "text": _build_text, "prompt_free": _build_prompt_free, "finetune": _build_finetune}

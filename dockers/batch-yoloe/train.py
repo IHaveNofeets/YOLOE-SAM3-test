@@ -44,22 +44,34 @@ def _label_line(obj, cls, w, h):
     return f"{cls} " + " ".join(f"{v:.6f}" for v in pts.reshape(-1))
 
 
-def build_yolo_dataset(ds: Dataset, scope, class_ids, names, include_uncompleted, include_covered, work,
-                       val_fraction=0.1, seed=0, log=print, progress=None, cancelled=None):
-    """Returns (data.yaml path, stats)."""
-    model_idx = {cid: i for i, cid in enumerate(class_ids)}
+def select_train_images(ds: Dataset, scope, max_images=0, seed=0):
+    """The scope's train images in a random order fixed by `seed`, cut to the first `max_images`
+    (0 = all). Returns (chosen dirs, number available). The same seed with a larger count gives a
+    superset of a smaller one."""
     dirs = ds.scope_images(scope, "train")
     if not dirs:
         raise ValueError("no training images in this scope")
     order = list(dirs)
     random.Random(seed).shuffle(order)
+    if max_images and max_images > 0:
+        order = order[:max_images]
+    return order, len(dirs)
+
+
+def build_yolo_dataset(ds: Dataset, scope, class_ids, names, include_uncompleted, include_covered, work,
+                       val_fraction=0.1, seed=0, max_images=0, log=print, progress=None, cancelled=None):
+    """Returns (data.yaml path, stats)."""
+    model_idx = {cid: i for i, cid in enumerate(class_ids)}
+    order, available = select_train_images(ds, scope, max_images, seed)
     n_val = max(1, round(len(order) * val_fraction)) if len(order) > 1 else 0
     split_of = {d: ("val" if i < n_val else "train") for i, d in enumerate(order)}
 
     shutil.rmtree(work, ignore_errors=True)
     for sub in ("images/train", "images/val", "labels/train", "labels/val"):
         os.makedirs(os.path.join(work, sub))
-    stats = {"train_images": 0, "val_images": 0, "objects": 0, "excluded_objects": 0, "greyed_images": 0}
+    stats = {"available_images": available, "max_images": max_images or 0, "seed": seed,
+             "train_images": 0, "val_images": 0, "objects": 0, "excluded_objects": 0, "greyed_images": 0}
+    dirs = sorted(order)
     for n, d in enumerate(dirs):
         if cancelled and cancelled():
             raise Cancelled()

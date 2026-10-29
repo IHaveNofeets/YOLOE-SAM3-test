@@ -1,13 +1,25 @@
-# NVIDIA GPU override for the batch-yoloe service. The default (compose.yaml alone) is CPU-only.
+# NVIDIA GPU override for the batch-yoloe and batch-sam3 services. The default (compose.yaml alone) is CPU-only.
 #
-#   docker compose -f compose.yaml -f compose.gpu.yaml up -d --build batch-yoloe
+#   docker compose -f compose.yaml -f compose.gpu.yaml up -d --build batch-yoloe batch-sam3
 #
-# Builds CUDA 13 PyTorch + onnxruntime-gpu into the image and gives the container the GPU(s).
+# Builds CUDA 13 PyTorch (+ onnxruntime-gpu for batch-yoloe) into the images and gives the containers the GPU(s).
 # The host needs a recent NVIDIA driver (CUDA 13 support) and the NVIDIA Container Toolkit
 # (Docker Desktop on Windows: WSL 2 backend, GPU support is built in).
-# To go back to CPU, rebuild without this file: docker compose up -d --build batch-yoloe
+# To go back to CPU, rebuild without this file: docker compose up -d --build batch-yoloe batch-sam3
 services:
   batch-yoloe:
+    build:
+      args:
+        TORCH_VARIANT: cu130
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  batch-sam3:
     build:
       args:
         TORCH_VARIANT: cu130
