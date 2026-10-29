@@ -44,33 +44,44 @@ def _label_line(obj, cls, w, h):
     return f"{cls} " + " ".join(f"{v:.6f}" for v in pts.reshape(-1))
 
 
-def select_train_images(ds: Dataset, scope, max_images=0, seed=0):
-    """The scope's train images in a random order fixed by `seed`, cut to the first `max_images`
-    (0 = all). Returns (chosen dirs, number available). The same seed with a larger count gives a
-    superset of a smaller one."""
-    dirs = ds.scope_images(scope, "train")
+# "train": a number of trainImages picked with a seed; "all": every trainImage; "ref": every refImage
+SOURCES = ("train", "all", "ref")
+
+
+def select_train_images(ds: Dataset, scope, max_images=0, seed=0, source="train"):
+    """The images to train on. source "train" / "all": the scope's trainImages in a random order fixed by
+    `seed` (validation is held out from the start of it), cut to the first `max_images` for "train"
+    (0 = all) - the same seed with a larger count gives a superset of a smaller one. source "ref": all of
+    the scope's refImages. Returns (chosen dirs, number available)."""
+    split = "ref" if source == "ref" else "train"
+    dirs = ds.scope_images(scope, split)
     if not dirs:
-        raise ValueError("no training images in this scope")
+        raise ValueError(f"no {'reference' if split == 'ref' else 'training'} images in this scope")
+    if split == "ref":
+        return sorted(dirs), len(dirs)
     order = list(dirs)
     random.Random(seed).shuffle(order)
-    if max_images and max_images > 0:
+    if source == "train" and max_images and max_images > 0:
         order = order[:max_images]
     return order, len(dirs)
 
 
 def build_yolo_dataset(ds: Dataset, scope, class_ids, names, include_uncompleted, include_covered, work,
-                       val_fraction=0.1, seed=0, max_images=0, log=print, progress=None, cancelled=None):
-    """Returns (data.yaml path, stats)."""
+                       val_fraction=0.1, seed=0, max_images=0, source="train", log=print, progress=None,
+                       cancelled=None):
+    """Returns (data.yaml path, stats). With source "ref" (a handful of images) nothing is held out:
+    the same images are used for training and validation."""
     model_idx = {cid: i for i, cid in enumerate(class_ids)}
-    order, available = select_train_images(ds, scope, max_images, seed)
-    n_val = max(1, round(len(order) * val_fraction)) if len(order) > 1 else 0
+    order, available = select_train_images(ds, scope, max_images, seed, source)
+    n_val = max(1, round(len(order) * val_fraction)) if len(order) > 1 and source != "ref" else 0
     split_of = {d: ("val" if i < n_val else "train") for i, d in enumerate(order)}
 
     shutil.rmtree(work, ignore_errors=True)
     for sub in ("images/train", "images/val", "labels/train", "labels/val"):
         os.makedirs(os.path.join(work, sub))
-    stats = {"available_images": available, "max_images": max_images or 0, "seed": seed,
-             "train_images": 0, "val_images": 0, "objects": 0, "excluded_objects": 0, "greyed_images": 0}
+    stats = {"source": source, "available_images": available, "max_images": max_images or 0, "seed": seed,
+             "used_images": len(order), "train_images": 0, "val_images": 0, "objects": 0, "excluded_objects": 0,
+             "greyed_images": 0}
     dirs = sorted(order)
     for n, d in enumerate(dirs):
         if cancelled and cancelled():
@@ -96,6 +107,12 @@ def build_yolo_dataset(ds: Dataset, scope, class_ids, names, include_uncompleted
         stats["excluded_objects"] += len(excluded)
         if progress:
             progress((n + 1) / len(dirs), f"preparing images {n + 1}/{len(dirs)}")
+    if n_val == 0:  # nothing held out (ref images, or a single image): validate on the training images
+        for sub in ("images", "labels"):
+            os.rmdir(os.path.join(work, sub, "val"))
+            os.symlink("train", os.path.join(work, sub, "val"))
+        stats["val_images"] = stats["train_images"]
+        stats["val_is_train"] = True
 
     yaml_path = os.path.join(work, "data.yaml")
     with open(yaml_path, "w") as f:

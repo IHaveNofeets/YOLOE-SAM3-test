@@ -121,7 +121,13 @@ function renderStartEditor(scope) {
 function renderBuildInfo(scope, kind) {
   const ids = new Set(scopeClassIds(scope));
   const dss = scope.type === "all" ? DS.datasets : DS.datasets.filter((d) => d.name === scope.dataset);
-  const split = kind === "prompt_tune" ? "train" : "ref";
+  const source = kind === "prompt_tune" ? $("bSource").value : "ref";
+  const fromRef = source === "ref";
+  $("bCountRow").hidden = source !== "train";
+  $("bSeedRow").hidden = fromRef;
+  $("bSeedHint").textContent = source === "train" ? "the images are picked at random with the seed; the same number and seed always give the same images"
+    : source === "all" ? "the seed picks which 10% are held out for validation" : "";
+  const split = fromRef ? "ref" : "train";
   let objs = 0, u = 0, c = 0, imgs = 0;
   for (const d of dss) {
     imgs += d.splits[split].images;
@@ -131,7 +137,12 @@ function renderBuildInfo(scope, kind) {
   const txt = `${imgs} ${split === "ref" ? "reference" : "training"} image(s), ${objs} in-scope object(s), of which ${u} uncompleted and ${c} covered `
     + `→ about ${Math.max(0, used)} used.`;
   if (kind !== "prompt_tune") { $("bRefInfo").textContent = txt; return; }
-  const n = +$("bMaxImages").value || 0;
+  if (fromRef) {
+    $("bTrainInfo").textContent = txt + " With so few images nothing is held out: validation uses the same reference images. "
+      + "Test images are never used. Left-out flagged objects are greyed out.";
+    return;
+  }
+  const n = source === "train" ? +$("bMaxImages").value || 0 : 0;
   const pick = n > 0 && n < imgs ? ` Using ${n} of them (about ${Math.round(used * n / imgs)} objects), picked with seed ${+$("bSeed").value || 0}.` : "";
   $("bTrainInfo").textContent = txt + pick + " 10% of the training images used are held out for validation; test images are never used. "
     + "Left-out flagged objects are greyed out in the training images.";
@@ -167,7 +178,8 @@ async function build() {
   if (kind === "exemplar" || kind === "visual") body.options.with_text = $("bWithText").checked;
   if (kind === "exemplar") Object.assign(body.options, { max_exemplars: +$("bMaxEx").value || 4, negatives: $("bNeg").checked });
   if (kind === "prompt_tune") Object.assign(body.options, { epochs: +$("bEpochs").value, tokens: +$("bTokens").value,
-    lr: +$("bLr").value, max_images: +$("bMaxImages").value || 0, seed: +$("bSeed").value || 0,
+    lr: +$("bLr").value, source: $("bSource").value, seed: +$("bSeed").value || 0,
+    max_images: $("bSource").value === "train" ? +$("bMaxImages").value || 0 : 0,
     start_text: [...$("bStart").querySelectorAll("input")].map((i) => i.value.trim()) });
   $("bMsg").textContent = "";
   try {
@@ -256,6 +268,15 @@ function fmtSecs(s) {
 }
 
 // ============================================================ models
+// what a prompt tuning was trained on, from its training data stats
+function trainDataLabel(td) {
+  if (!td?.available_images) return "";
+  if (td.source === "ref") return `trained on the ${td.train_images} reference image(s)`;
+  const used = td.used_images ?? td.train_images + (td.val_is_train ? 0 : td.val_images);
+  return used >= td.available_images ? `all ${used} train images, seed ${td.seed ?? 0}`
+    : `${used} of ${td.available_images} train images, seed ${td.seed ?? 0}`;
+}
+
 async function loadModels() {
   const r = await api("/api/models");
   models = r.models;
@@ -275,7 +296,7 @@ async function loadModels() {
     const td = tr?.data;
     const trainInfo = tr ? `<div class="small muted">${tr.epochs_done}/${tr.epochs} epochs · ${tr.tokens} token(s) per class`
       + `${tr.best_val_ap50 != null ? ` · best val AP50 ${f3(tr.best_val_ap50)} (epoch ${tr.best_epoch})` : ""}</div>`
-      + (td ? `<div class="small muted">${td.train_images + td.val_images} of ${td.available_images} train images, seed ${td.seed ?? 0}</div>` : "")
+      + `<div class="small muted">${trainDataLabel(td)}</div>`
       + `<div class="small muted">start: ${(o.start_text || m.class_names || []).map((s) => `“${esc(s)}”`).join(", ")}</div>` : "";
     const prompts = m.type === "text" && promptGroups(m).length
       ? `<div class="mpreview">${promptGroups(m).map((g, i) => g.map((p) => `<span class="chip" title="${esc(m.class_names?.[i] ?? "")}">${esc(p)}</span>`).join("")).join("")}</div>` : "";
@@ -483,7 +504,7 @@ $("bKind").onchange = onFormChange;
 for (const el of document.querySelectorAll('input[name="bScope"]')) el.onchange = onFormChange;
 $("bIncU").onchange = onFormChange;
 $("bIncC").onchange = onFormChange;
-$("bMaxImages").oninput = $("bSeed").oninput = onFormChange;
+$("bMaxImages").oninput = $("bSeed").oninput = $("bSource").onchange = onFormChange;
 $("bName").oninput = () => { nameTouched = true; };
 $("bCopyFrom").onchange = copyPrompts;
 $("bBuild").onclick = build;

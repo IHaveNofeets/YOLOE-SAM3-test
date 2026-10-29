@@ -599,7 +599,10 @@ def _build_prompt_tune(job, name, spec, class_ids, names, tmp_dir):
         start = list(names)
     args = {"data_root": DATA_ROOT, "scope": spec["scope"], "class_ids": class_ids, "names": names, "start_text": start,
             "include_uncompleted": spec["include_uncompleted"], "include_covered": spec["include_covered"],
-            "max_images": max(0, int(o.get("max_images") or 0)), "seed": int(o.get("seed") or 0),
+            # train: a number of trainImages (+ seed); all: every trainImage; ref: every refImage
+            "source": o.get("source") if o.get("source") in prompt_tune.SOURCES else "train",
+            "max_images": max(0, int(o.get("max_images") or 0)) if o.get("source", "train") == "train" else 0,
+            "seed": int(o.get("seed") or 0),
             "epochs": max(1, int(o.get("epochs") or 10)), "tokens": max(1, int(o.get("tokens") or 4)),
             "lr": float(o.get("lr") or 5e-3), "work": os.path.join(WORK_DIR, name),
             "weights": os.path.abspath(WEIGHTS), "device": TORCH_DEVICE}
@@ -612,7 +615,8 @@ def _build_prompt_tune(job, name, spec, class_ids, names, tmp_dir):
     shutil.move(path, dst)
     shutil.rmtree(args["work"], ignore_errors=True)
     return [(dst, "prompt.pt")], {"training": {"epochs": args["epochs"], "tokens": args["tokens"], "lr": args["lr"],
-                                               "max_images": args["max_images"], "seed": args["seed"], **summary}}
+                                               "source": args["source"], "max_images": args["max_images"],
+                                               "seed": args["seed"], **summary}}
 
 
 BUILDERS = {"text": _build_text, "exemplar": _build_exemplar, "visual": _build_visual, "prompt_tune": _build_prompt_tune}

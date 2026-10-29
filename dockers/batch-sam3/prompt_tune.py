@@ -42,15 +42,23 @@ def _f(v):
     return "–" if v is None else f"{v:.3f}"
 
 
-def select_train_images(ds: Dataset, scope, max_images=0, seed=0):
-    """The scope's train images in a random order fixed by `seed`, cut to the first `max_images`
-    (0 = all). Returns (chosen dirs, number available)."""
-    dirs = ds.scope_images(scope, "train")
+# "train": a number of trainImages picked with a seed; "all": every trainImage; "ref": every refImage
+SOURCES = ("train", "all", "ref")
+
+
+def select_train_images(ds: Dataset, scope, max_images=0, seed=0, source="train"):
+    """The images to train on. source "train" / "all": the scope's trainImages in a random order fixed by
+    `seed` (validation is held out from the start of it), cut to the first `max_images` for "train"
+    (0 = all). source "ref": all of the scope's refImages. Returns (chosen dirs, number available)."""
+    split = "ref" if source == "ref" else "train"
+    dirs = ds.scope_images(scope, split)
     if not dirs:
-        raise ValueError("no training images in this scope")
+        raise ValueError(f"no {'reference' if split == 'ref' else 'training'} images in this scope")
+    if split == "ref":
+        return sorted(dirs), len(dirs)
     order = list(dirs)
     random.Random(seed).shuffle(order)
-    if max_images and max_images > 0:
+    if source == "train" and max_images and max_images > 0:
         order = order[:max_images]
     return order, len(dirs)
 
@@ -92,10 +100,19 @@ def tune(args, log=print, progress=None, cancelled=None):
 
     ds = Dataset(args["data_root"])
     class_ids, names = args["class_ids"], args["names"]
-    order, available = select_train_images(ds, args["scope"], args["max_images"], args["seed"])
-    n_val = max(1, round(len(order) * 0.1)) if len(order) > 1 else 0
-    val_dirs, train_dirs = sorted(order[:n_val]), sorted(order[n_val:])
-    log(f"{len(order)} of {available} train images (seed {args['seed']}): {len(train_dirs)} train, {len(val_dirs)} val")
+    source = args.get("source", "train")
+    order, available = select_train_images(ds, args["scope"], args["max_images"], args["seed"], source)
+    if source == "ref":
+        # a handful of images: nothing is held out, validation uses the same images
+        train_dirs, val_dirs = sorted(order), []
+        log(f"training on the {len(train_dirs)} reference image(s); validation uses the same images")
+    else:
+        n_val = max(1, round(len(order) * 0.1)) if len(order) > 1 else 0
+        val_dirs, train_dirs = sorted(order[:n_val]), sorted(order[n_val:])
+        log(f"{len(order)} of {available} train images (seed {args['seed']}): {len(train_dirs)} train, {len(val_dirs)} val")
+    # (cache index, image) to validate on; nothing held out -> the training images (their features are cached)
+    eval_items = ([(len(train_dirs) + i, d) for i, d in enumerate(val_dirs)] if val_dirs
+                  else list(enumerate(train_dirs)))
 
     work = args["work"]
     cache = os.path.join(work, "features")
@@ -189,10 +206,10 @@ def tune(args, log=print, progress=None, cancelled=None):
     @torch.no_grad()
     def validate():
         imgs = []
-        for i, d in enumerate(val_dirs):
+        for i, d in eval_items:
             if cancelled and cancelled():
                 raise Cancelled()
-            feats = features(len(train_dirs) + i, d)
+            feats = features(i, d)
             with torch.autocast(dev.type, dtype=torch.float16, enabled=use_amp):
                 dets = engine.detect(feats, prompts(), sizes[d], conf=0.01)
             truth = ds.truth(d)
@@ -213,7 +230,7 @@ def tune(args, log=print, progress=None, cancelled=None):
     best = {"fitness": -1.0, "ap50": None, "epoch": 0, "tokens": learned.detach().clone()}
     history = []
     step = 0
-    if val_dirs:
+    if eval_items:
         m = validate()
         log(f"before training (starting prompts): val AP50 {_f(m['ap50'])}, AP50-95 {_f(m['ap50_95'])}")
         best.update(fitness=fitness(m), ap50=m["ap50"])
@@ -240,7 +257,7 @@ def tune(args, log=print, progress=None, cancelled=None):
             if progress:
                 progress(step / steps_total, f"epoch {ep + 1}/{epochs}, image {j + 1}/{len(idx)}, loss {run_loss / n_loss:.3f}")
         rec = {"epoch": ep + 1, "train_loss": round(run_loss / max(1, n_loss), 4)}
-        if val_dirs:
+        if eval_items:
             m = validate()
             rec.update(val_ap50=m["ap50"], val_ap50_95=m["ap50_95"])
             if fitness(m) > best["fitness"]:
@@ -249,14 +266,15 @@ def tune(args, log=print, progress=None, cancelled=None):
             best.update(epoch=ep + 1, tokens=learned.detach().clone())
         history.append(rec)
         log(f"epoch {ep + 1}/{epochs}: loss {rec['train_loss']}"
-            + (f", val AP50 {_f(rec['val_ap50'])}, AP50-95 {_f(rec['val_ap50_95'])}" if val_dirs else ""))
+            + (f", val AP50 {_f(rec['val_ap50'])}, AP50-95 {_f(rec['val_ap50_95'])}" if eval_items else ""))
 
     out = os.path.join(work, "prompt.pt")
     torch.save({"text": list(start_text), "tokens": [t.cpu() for t in best["tokens"]]}, out)
     shutil.rmtree(cache, ignore_errors=True)
     summary = {"epochs_done": epochs, "best_epoch": best["epoch"], "best_val_ap50": best["ap50"],
                "history": history, "data": {"available_images": available, "max_images": args["max_images"] or 0,
-                                            "seed": args["seed"], "train_images": len(train_dirs), "val_images": len(val_dirs)}}
+                                            "seed": args["seed"], "train_images": len(train_dirs), "val_images": len(val_dirs) or len(train_dirs),
+                                            "val_is_train": not val_dirs, "source": source, "used_images": len(order)}}
     if best["epoch"] == 0:
         log("no epoch beat the starting prompts on validation: the tokens are kept at their starting point")
     return out, summary

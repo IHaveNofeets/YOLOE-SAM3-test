@@ -110,20 +110,31 @@ function onFormChange() {
 function renderBuildInfo(scope, kind) {
   const ids = new Set(scopeClassIds(scope));
   const dss = scope.type === "all" ? DS.datasets : DS.datasets.filter((d) => d.name === scope.dataset);
-  const split = kind === "visual" ? "ref" : "train";
-  let objs = 0, u = 0, c = 0, imgs = 0;
-  for (const d of dss) {
-    imgs += d.splits[split].images;
-    for (const [i, v] of Object.entries(d.splits[split].classes)) if (ids.has(+i)) { objs += v.objects; u += v.uncompleted; c += v.covered; }
+  const source = kind === "finetune" ? $("bSource").value : "ref";
+  $("bCountRow").hidden = source !== "train";
+  $("bSeedRow").hidden = source === "ref";
+  $("bSeedHint").textContent = source === "train" ? "the images are picked at random with the seed; the same number and seed always give the same images"
+    : source === "all" ? "the seed picks which 10% are held out for validation" : "";
+  const count = (split) => {
+    let objs = 0, u = 0, c = 0, imgs = 0;
+    for (const d of dss) {
+      imgs += d.splits[split].images;
+      for (const [i, v] of Object.entries(d.splits[split].classes)) if (ids.has(+i)) { objs += v.objects; u += v.uncompleted; c += v.covered; }
+    }
+    const used = objs - (!$("bIncU").checked ? u : 0) - (!$("bIncC").checked ? c : 0); // approximate: an object can be both
+    return { imgs, used: Math.max(0, used), txt: `${imgs} ${split === "ref" ? "reference" : "training"} image(s), ${objs} in-scope object(s), `
+      + `of which ${u} uncompleted and ${c} covered → about ${Math.max(0, used)} used.` };
+  };
+  if (kind === "visual") { $("bRefInfo").textContent = count("ref").txt; return; }
+  const tail = " Test images are never used. Left-out flagged objects are greyed out in the training images.";
+  if (source === "ref") {
+    $("bTrainInfo").textContent = count("ref").txt + " With so few images nothing is held out: validation uses the same reference images." + tail;
+    return;
   }
-  const used = objs - (!$("bIncU").checked ? u : 0) - (!$("bIncC").checked ? c : 0); // approximate: an object can be both
-  const txt = `${imgs} ${split === "ref" ? "reference" : "training"} image(s), ${objs} in-scope object(s), of which ${u} uncompleted and ${c} covered `
-    + `→ about ${Math.max(0, used)} used.`;
-  if (kind === "visual") { $("bRefInfo").textContent = txt; return; }
-  const n = +$("bMaxImages").value || 0;
-  const pick = n > 0 && n < imgs ? ` Using ${n} of them (about ${Math.round(used * n / imgs)} objects), picked with seed ${+$("bSeed").value || 0}.` : "";
-  $("bTrainInfo").textContent = txt + pick + " 10% of the training images used are held out for validation; test images are never used. "
-    + "Left-out flagged objects are greyed out in the training images.";
+  const tr = count("train");
+  const n = source === "train" ? +$("bMaxImages").value || 0 : 0;
+  const pick = n > 0 && n < tr.imgs ? ` Using ${n} of them (about ${Math.round(tr.used * n / tr.imgs)} objects), picked with seed ${+$("bSeed").value || 0}.` : "";
+  $("bTrainInfo").textContent = tr.txt + pick + " 10% of the training images used are held out for validation." + tail;
 }
 
 function renderPromptEditor(scope) {
@@ -156,7 +167,8 @@ async function build() {
     .map((ta) => ta.value.split("\n").map((s) => s.trim()).filter(Boolean));
   if (kind === "finetune") Object.assign(body.options, { method: $("bMethod").value, epochs: +$("bEpochs").value,
     imgsz: +$("bImgsz").value, batch: +$("bBatch").value, patience: +$("bPatience").value,
-    max_images: +$("bMaxImages").value || 0, seed: +$("bSeed").value || 0 });
+    source: $("bSource").value, max_images: $("bSource").value === "train" ? +$("bMaxImages").value || 0 : 0,
+    seed: +$("bSeed").value || 0 });
   $("bMsg").textContent = "";
   try {
     await post("/api/models", body);
@@ -244,6 +256,15 @@ function fmtSecs(s) {
 }
 
 // ============================================================ models
+// what a fine-tune was trained on, from its training data stats
+function trainDataLabel(td) {
+  if (!td?.available_images) return "";
+  if (td.source === "ref") return `trained on the ${td.train_images} reference image(s)`;
+  const used = td.used_images ?? td.train_images + (td.val_is_train ? 0 : td.val_images);
+  return used >= td.available_images ? `all ${used} train images, seed ${td.seed ?? 0}`
+    : `${used} of ${td.available_images} train images, seed ${td.seed ?? 0}`;
+}
+
 async function loadModels() {
   const r = await api("/api/models");
   models = r.models;
@@ -256,7 +277,7 @@ async function loadModels() {
       ? `<div class="small">uncompleted: ${m.include_uncompleted ? "used" : "left out"} · covered: ${m.include_covered ? "used" : "left out"}</div>` : "";
     const tr = m.training;
     const td = tr?.data;
-    const trainImgs = td?.available_images ? `<div class="small muted">${td.train_images + td.val_images} of ${td.available_images} train images, seed ${td.seed ?? 0}</div>` : "";
+    const trainImgs = `<div class="small muted">${trainDataLabel(td)}</div>`;
     const trainInfo = tr ? `<div class="small muted">${esc(tr.method)} · ${tr.epochs_done}/${tr.epochs} epochs · imgsz ${tr.imgsz}`
       + `${tr.final_val?.["metrics/mAP50(B)"] != null ? ` · val mAP50 ${f3(tr.final_val["metrics/mAP50(B)"])}` : ""}</div>${trainImgs}` : "";
     const prompts = m.type === "text" && promptGroups(m).length
@@ -474,7 +495,7 @@ $("bMethod").onchange = () => { $("bEpochs").value = $("bMethod").value === "ful
 for (const el of document.querySelectorAll('input[name="bScope"]')) el.onchange = onFormChange;
 $("bIncU").onchange = onFormChange;
 $("bIncC").onchange = onFormChange;
-$("bMaxImages").oninput = $("bSeed").oninput = onFormChange;
+$("bMaxImages").oninput = $("bSeed").oninput = $("bSource").onchange = onFormChange;
 $("bName").oninput = () => { nameTouched = true; };
 $("bCopyFrom").onchange = copyPrompts;
 $("bBuild").onclick = build;
