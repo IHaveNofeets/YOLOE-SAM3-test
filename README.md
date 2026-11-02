@@ -135,6 +135,19 @@ boxes. Without it, SAM 3 gets its default word "visual".
 | trainImages: all of them | every training image in the scope; the seed picks which 10 % are held out for validation |
 | refImages: all of them | every reference image in the scope; with so few, validation uses the same images |
 
+### Focus (fine-tune and prompt tuning)
+
+What the training should try hardest to avoid:
+
+| Focus | In the loss | Epoch kept |
+|---|---|---|
+| fewer false positives (default) | scoring background (a wrong detection) costs twice as much | best F0.5 on validation (precision counts more) |
+| balanced | no weighting | best F1 |
+| fewer false negatives | missing an object costs twice as much | best F2 (recall counts more) |
+
+The confidence slider in the test still sets the final trade-off. The focus changes what the model
+itself learns.
+
 ## Test output
 
 Each test writes a folder `output/YOLOE/<date>_<name>/` or `output/SAM3/<date>_<name>/`:
@@ -181,3 +194,12 @@ copies, so change both.
 
 Built models are kept in `dockers/<container>/modelData/models/` and are not in git (`modelData/` is
 ignored).
+
+## License
+
+This project is licensed under the Apache License 2.0, see [LICENSE](LICENSE).
+
+The containers install third-party software with licenses of their own, including
+[Ultralytics](https://github.com/ultralytics/ultralytics) (AGPL-3.0). The YOLOE and SAM 3 weights come
+under their own terms, and the SAM 3 weights under Meta's license, which you accept when you download
+them on Hugging Face.

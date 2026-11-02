@@ -603,10 +603,12 @@ def _build_prompt_tune(job, name, spec, class_ids, names, tmp_dir):
             "source": o.get("source") if o.get("source") in prompt_tune.SOURCES else "train",
             "max_images": max(0, int(o.get("max_images") or 0)) if o.get("source", "train") == "train" else 0,
             "seed": int(o.get("seed") or 0),
+            "focus": o.get("focus") if o.get("focus") in prompt_tune.FOCUS else "fp",  # fp (default) / balanced / fn
             "epochs": max(1, int(o.get("epochs") or 10)), "tokens": max(1, int(o.get("tokens") or 4)),
             "lr": float(o.get("lr") or 5e-3), "work": os.path.join(WORK_DIR, name),
             "weights": os.path.abspath(WEIGHTS), "device": TORCH_DEVICE}
-    job.say(f"prompt tuning: {args['epochs']} epochs, {args['tokens']} token(s) per class, lr {args['lr']}, device "
+    job.say(f"prompt tuning: {args['epochs']} epochs, {args['tokens']} token(s) per class, lr {args['lr']}, "
+            f"focus {args['focus']}, device "
             f"{('GPU ' + GPU_NAME) if TORCH_GPU else 'cpu (slow: about a minute per image per epoch)'}")
     # SAM 3 is not loaded in the server during a job (see _run_job): the training process has the memory
     path, summary = prompt_tune.tune_in_process(args, log=job.say, progress=lambda p, m: job.set(0.02 + 0.96 * p, m),

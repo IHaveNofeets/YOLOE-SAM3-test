@@ -86,6 +86,11 @@
         <label>Epochs <input id="bEpochs" type="number" min="1" max="200" value="10"></label>
         <label>Tokens per class <input id="bTokens" type="number" min="1" max="32" value="4"></label>
         <label>Learning rate <input id="bLr" type="number" min="0.00001" max="1" step="0.0005" value="0.005"></label>
+        <label title="Fewer false positives: wrong detections cost twice as much in training, and the epoch with the best F0.5 (precision counts more) is kept. Fewer false negatives: missed objects cost twice as much, best F2 (recall counts more).">
+          Focus <select id="bFocus">
+          <option value="fp" selected>fewer false positives (wrong detections)</option>
+          <option value="balanced">balanced</option>
+          <option value="fn">fewer false negatives (missed objects)</option></select></label>
       </div>
       <div class="row">
         <label>Training data <select id="bSource">

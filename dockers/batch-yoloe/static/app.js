@@ -6,6 +6,7 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const KIND_LABELS = { visual: "Visual prompt", text: "Text prompt", prompt_free: "Prompt-free", finetune: "Fine-tuned", external: "External" };
+const FOCUS_LABELS = { fp: "fewer FP", balanced: "balanced", fn: "fewer FN" };
 const f3 = (v) => (v == null || Number.isNaN(v) ? "–" : v.toFixed(3));
 const pct = (v) => (v == null ? "–" : (100 * v).toFixed(1) + "%");
 
@@ -167,7 +168,7 @@ async function build() {
     .map((ta) => ta.value.split("\n").map((s) => s.trim()).filter(Boolean));
   if (kind === "finetune") Object.assign(body.options, { method: $("bMethod").value, epochs: +$("bEpochs").value,
     imgsz: +$("bImgsz").value, batch: +$("bBatch").value, patience: +$("bPatience").value,
-    source: $("bSource").value, max_images: $("bSource").value === "train" ? +$("bMaxImages").value || 0 : 0,
+    focus: $("bFocus").value, source: $("bSource").value, max_images: $("bSource").value === "train" ? +$("bMaxImages").value || 0 : 0,
     seed: +$("bSeed").value || 0 });
   $("bMsg").textContent = "";
   try {
@@ -279,6 +280,7 @@ async function loadModels() {
     const td = tr?.data;
     const trainImgs = `<div class="small muted">${trainDataLabel(td)}</div>`;
     const trainInfo = tr ? `<div class="small muted">${esc(tr.method)} · ${tr.epochs_done}/${tr.epochs} epochs · imgsz ${tr.imgsz}`
+      + (tr.focus ? ` · focus: ${FOCUS_LABELS[tr.focus] || esc(tr.focus)}` : "")
       + `${tr.final_val?.["metrics/mAP50(B)"] != null ? ` · val mAP50 ${f3(tr.final_val["metrics/mAP50(B)"])}` : ""}</div>${trainImgs}` : "";
     const prompts = m.type === "text" && promptGroups(m).length
       ? `<div class="mpreview">${promptGroups(m).map((g, i) => g.map((p) => `<span class="chip" title="${esc(m.class_names?.[i] ?? "")}">${esc(p)}</span>`).join("")).join("")}</div>` : "";

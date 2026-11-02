@@ -80,6 +80,13 @@
         <label>Patience <input id="bPatience" type="number" min="1" max="500" value="20"></label>
       </div>
       <div class="row">
+        <label title="Fewer false positives: wrong detections cost twice as much in training, and the epoch with the best F0.5 (precision counts more) is kept. Fewer false negatives: missed objects cost twice as much, best F2 (recall counts more).">
+          Focus <select id="bFocus">
+          <option value="fp" selected>fewer false positives (wrong detections)</option>
+          <option value="balanced">balanced</option>
+          <option value="fn">fewer false negatives (missed objects)</option></select></label>
+      </div>
+      <div class="row">
         <label>Training data <select id="bSource">
           <option value="train">trainImages: a number of them (+ seed)</option>
           <option value="all">trainImages: all of them</option>

@@ -718,6 +718,7 @@ def _build_finetune(job, name, spec, class_ids, names, tmp_dir):
     source = o.get("source") if o.get("source") in train.SOURCES else "train"
     max_images = max(0, int(o.get("max_images") or 0)) if source == "train" else 0  # 0 = all
     seed = int(o.get("seed") or 0)
+    focus = o.get("focus") if o.get("focus") in train.FOCUS else "fp"  # fp (default) / balanced / fn
     _ensure_asset(TEXT_ENCODER)  # the trainer initialises the class embeddings from the class names
     work = os.path.join(WORK_DIR, name)
     job.say(f"preparing the training data in {work}")
@@ -730,14 +731,14 @@ def _build_finetune(job, name, spec, class_ids, names, tmp_dir):
     else:
         job.say(f"{stats['used_images']} of {stats['available_images']} train images (seed {seed}): "
                 f"{stats['train_images']} train, {stats['val_images']} val")
-    job.say(f"training: {method}, {epochs} epochs, imgsz {imgsz}, batch {batch}, device "
+    job.say(f"training: {method}, {epochs} epochs, imgsz {imgsz}, batch {batch}, focus {FOCUS_LABELS[focus]}, device "
             f"{('GPU ' + GPU_NAME) if TORCH_GPU else 'cpu'}")
     # training and the ONNX export run in a separate process: all their memory is returned when it exits,
     # and if it runs out of memory only that process is killed, not the server and its queue
     best, exported, summary = train.finetune_in_process(
         {"base_weights": os.path.abspath(BASE_WEIGHTS), "weights_dir": os.path.abspath(WEIGHTS_DIR),
          "data_yaml": data_yaml, "work": work, "method": method, "epochs": epochs, "imgsz": imgsz, "batch": batch,
-         "patience": patience, "workers": workers, "device": TRAIN_DEVICE},
+         "patience": patience, "workers": workers, "device": TRAIN_DEVICE, "focus": focus},
         log=job.say, progress=lambda p, m: job.set(0.1 + 0.86 * p, m), cancelled=job.cancel.is_set)
     dst = os.path.join(tmp_dir, "model.onnx")
     shutil.move(exported, dst)
@@ -746,9 +747,11 @@ def _build_finetune(job, name, spec, class_ids, names, tmp_dir):
     shutil.rmtree(os.path.join(work, "images"), ignore_errors=True)
     return dst, [(os.path.join(tmp_dir, "best.pt"), "best.pt")], {
         "training": {"method": method, "epochs": epochs, "imgsz": imgsz, "batch": batch, "patience": patience,
-                     "source": source, "max_images": max_images, "seed": seed, "data": stats, **summary}}
+                     "focus": focus, "source": source, "max_images": max_images, "seed": seed, "data": stats,
+                     **summary}}
 
 
+FOCUS_LABELS = {"fp": "fewer false positives", "balanced": "balanced", "fn": "fewer false negatives"}
 BUILDERS = {"visual": _build_visual, "text": _build_text, "prompt_free": _build_prompt_free, "finetune": _build_finetune}
 
 

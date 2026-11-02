@@ -28,6 +28,10 @@ from dataset import Dataset, bbox_xyxy
 GREY = (114, 114, 114)
 W_CLS, W_L1, W_GIOU = 2.0, 5.0, 2.0  # matching cost and loss weights (DETR / SAM 3 style)
 ACCUMULATE = 4  # images per optimiser step
+# Training focus: (weight on objects, weight on background in the class and presence losses, beta of the
+# F-score that picks the best epoch). "fp" (fewer false positives) punishes scoring background twice as
+# hard and keeps the epoch with the best F0.5 (precision counts more); "fn" the reverse with F2.
+FOCUS = {"fp": (1.0, 2.0, 0.5), "balanced": (1.0, 1.0, 1.0), "fn": (2.0, 1.0, 2.0)}
 
 
 class Cancelled(Exception):
@@ -156,6 +160,9 @@ def tune(args, log=print, progress=None, cancelled=None):
         sizes[d] = (t["height"], t["width"])
 
     # ---------------------------------------------------------------- the learned tokens
+    focus = args.get("focus") if args.get("focus") in FOCUS else "fp"
+    w_pos, w_neg, beta = FOCUS[focus]
+    log(f"focus: {focus} (objects x{w_pos:g}, background x{w_neg:g} in the loss; best epoch by F{beta:g})")
     start_text = args.get("start_text") or names  # the frozen text part of each class's prompt
     log("starting prompts: " + ", ".join(f"{n}: '{t}'" for n, t in zip(names, start_text)))
     text = engine.text_tokens(start_text)
@@ -199,8 +206,10 @@ def tune(args, log=print, progress=None, cancelled=None):
                 target[rows] = 1.0
                 total = total + (W_L1 * F.l1_loss(pred_xyxy[rows], gt[cols], reduction="sum")
                                  + W_GIOU * (1 - torch.diag(generalized_box_iou(pred_xyxy[rows], gt[cols]))).sum()) / n
-            total = total + W_CLS * sigmoid_focal_loss(logits[c], target, alpha=0.25, gamma=2.0, reduction="sum") / max(n, 1)
-            total = total + F.binary_cross_entropy_with_logits(presence[c], torch.tensor(float(n > 0), device=dev))
+            focal = sigmoid_focal_loss(logits[c], target, alpha=0.25, gamma=2.0, reduction="none")
+            total = total + W_CLS * (focal * torch.where(target > 0, w_pos, w_neg)).sum() / max(n, 1)
+            total = total + (w_pos if n else w_neg) * F.binary_cross_entropy_with_logits(
+                presence[c], torch.tensor(float(n > 0), device=dev))
         return total / len(names)
 
     @torch.no_grad()
@@ -224,17 +233,20 @@ def tune(args, log=print, progress=None, cancelled=None):
     epochs = args["epochs"]
     steps_total = epochs * max(1, len(train_dirs))
     rng = random.Random(args["seed"])
-    def fitness(m):  # how the best epoch is picked: Ultralytics' weighting of AP50 and AP50-95
-        return 0.1 * (m["ap50"] or 0.0) + 0.9 * (m["ap50_95"] or 0.0)
+    def fitness(m):  # how the best epoch is picked: the best F-beta over the confidence (beta from the focus)
+        b2 = beta * beta
+        return max(((1 + b2) * p * r / (b2 * p + r) if p + r else 0.0 for _, p, r, _ in m.get("curve") or []),
+                   default=0.0)
 
     best = {"fitness": -1.0, "ap50": None, "epoch": 0, "tokens": learned.detach().clone()}
     history = []
     step = 0
     if eval_items:
         m = validate()
-        log(f"before training (starting prompts): val AP50 {_f(m['ap50'])}, AP50-95 {_f(m['ap50_95'])}")
+        log(f"before training (starting prompts): val AP50 {_f(m['ap50'])}, AP50-95 {_f(m['ap50_95'])}, "
+            f"best F{beta:g} {fitness(m):.3f}")
         best.update(fitness=fitness(m), ap50=m["ap50"])
-        history.append({"epoch": 0, "val_ap50": m["ap50"], "val_ap50_95": m["ap50_95"]})
+        history.append({"epoch": 0, "val_ap50": m["ap50"], "val_ap50_95": m["ap50_95"], "val_fbeta": round(fitness(m), 4)})
     for ep in range(epochs):
         idx = list(range(len(train_dirs)))
         rng.shuffle(idx)
@@ -259,19 +271,21 @@ def tune(args, log=print, progress=None, cancelled=None):
         rec = {"epoch": ep + 1, "train_loss": round(run_loss / max(1, n_loss), 4)}
         if eval_items:
             m = validate()
-            rec.update(val_ap50=m["ap50"], val_ap50_95=m["ap50_95"])
+            rec.update(val_ap50=m["ap50"], val_ap50_95=m["ap50_95"], val_fbeta=round(fitness(m), 4))
             if fitness(m) > best["fitness"]:
                 best.update(fitness=fitness(m), ap50=m["ap50"], epoch=ep + 1, tokens=learned.detach().clone())
         else:
             best.update(epoch=ep + 1, tokens=learned.detach().clone())
         history.append(rec)
         log(f"epoch {ep + 1}/{epochs}: loss {rec['train_loss']}"
-            + (f", val AP50 {_f(rec['val_ap50'])}, AP50-95 {_f(rec['val_ap50_95'])}" if eval_items else ""))
+            + (f", val AP50 {_f(rec['val_ap50'])}, AP50-95 {_f(rec['val_ap50_95'])}, best F{beta:g} {rec['val_fbeta']:.3f}"
+               if eval_items else ""))
 
     out = os.path.join(work, "prompt.pt")
     torch.save({"text": list(start_text), "tokens": [t.cpu() for t in best["tokens"]]}, out)
     shutil.rmtree(cache, ignore_errors=True)
-    summary = {"epochs_done": epochs, "best_epoch": best["epoch"], "best_val_ap50": best["ap50"],
+    summary = {"epochs_done": epochs, "best_epoch": best["epoch"], "best_val_ap50": best["ap50"], "focus": focus,
+               "best_val_fbeta": round(best["fitness"], 4) if best["fitness"] >= 0 else None, "fbeta": beta,
                "history": history, "data": {"available_images": available, "max_images": args["max_images"] or 0,
                                             "seed": args["seed"], "train_images": len(train_dirs), "val_images": len(val_dirs) or len(train_dirs),
                                             "val_is_train": not val_dirs, "source": source, "used_images": len(order)}}

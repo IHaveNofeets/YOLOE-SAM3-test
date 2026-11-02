@@ -18,9 +18,53 @@ from dataset import Dataset, bbox_xyxy
 
 GREY = (114, 114, 114)
 
+# Training focus: (weight on objects, weight on background in the class loss, beta of the F-score that
+# picks the best epoch). "fp" (fewer false positives) punishes scoring background twice as hard and keeps
+# the epoch with the best F0.5 (precision counts more); "fn" (fewer false negatives) the reverse with F2.
+FOCUS = {"fp": (1.0, 2.0, 0.5), "balanced": (1.0, 1.0, 1.0), "fn": (2.0, 1.0, 2.0)}
+
 
 class Cancelled(Exception):
     pass
+
+
+def apply_focus(focus):
+    """Make Ultralytics train with the focus (in the training process only - it patches the library):
+    the detection losses' class BCE is weighted, and an epoch's fitness (best.pt, early stopping) is the
+    best F-beta over the confidence on the validation images instead of mAP50-95."""
+    import torch
+    import torch.nn.functional as F
+    from ultralytics.utils import loss as uloss
+    from ultralytics.utils.metrics import Metric
+
+    w_pos, w_neg, beta = FOCUS[focus]
+
+    class WeightedBCE(torch.nn.Module):
+        """BCE with logits, reduction "none", the target part weighted by w_pos and the rest by w_neg
+        (Ultralytics' targets are soft: the IoU-aligned score of the assigned object)."""
+
+        def forward(self, x, t):
+            return -(w_pos * t * F.logsigmoid(x) + w_neg * (1 - t) * F.logsigmoid(-x))
+
+    if (w_pos, w_neg) != (1.0, 1.0):
+        orig_init = uloss.v8DetectionLoss.__init__
+
+        def init(self, *a, **k):
+            orig_init(self, *a, **k)
+            self.bce = WeightedBCE()
+
+        uloss.v8DetectionLoss.__init__ = init  # also used by the segmentation and end-to-end losses
+
+    b2 = beta * beta
+
+    def fitness(self):
+        p, r = getattr(self, "p_curve", None), getattr(self, "r_curve", None)
+        if p is None or not len(p):
+            return 0.0
+        p, r = np.asarray(p).mean(0), np.asarray(r).mean(0)  # mean over classes, per confidence
+        return float(np.max((1 + b2) * p * r / (b2 * p + r + 1e-16)))
+
+    Metric.fitness = fitness
 
 
 def _polygon_points(obj):
@@ -222,6 +266,7 @@ def _child_main(args):
         from ultralytics import YOLOE
         from ultralytics.utils import SETTINGS
         SETTINGS.update(weights_dir=args["weights_dir"])  # where the text encoder is (get_text_pe loads it by name)
+        apply_focus(args.get("focus", "fp"))
 
         best, summary = finetune(
             args["base_weights"], args["data_yaml"], args["work"], args["method"], args["epochs"], args["imgsz"],

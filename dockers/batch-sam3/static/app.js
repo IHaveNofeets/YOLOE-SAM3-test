@@ -6,6 +6,7 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const KIND_LABELS = { text: "Text prompt", exemplar: "Exemplar prompt", visual: "Visual prompt", prompt_tune: "Prompt-tuned" };
+const FOCUS_LABELS = { fp: "fewer FP", balanced: "balanced", fn: "fewer FN" };
 const f3 = (v) => (v == null || Number.isNaN(v) ? "–" : v.toFixed(3));
 const pct = (v) => (v == null ? "–" : (100 * v).toFixed(1) + "%");
 
@@ -178,7 +179,7 @@ async function build() {
   if (kind === "exemplar" || kind === "visual") body.options.with_text = $("bWithText").checked;
   if (kind === "exemplar") Object.assign(body.options, { max_exemplars: +$("bMaxEx").value || 4, negatives: $("bNeg").checked });
   if (kind === "prompt_tune") Object.assign(body.options, { epochs: +$("bEpochs").value, tokens: +$("bTokens").value,
-    lr: +$("bLr").value, source: $("bSource").value, seed: +$("bSeed").value || 0,
+    lr: +$("bLr").value, focus: $("bFocus").value, source: $("bSource").value, seed: +$("bSeed").value || 0,
     max_images: $("bSource").value === "train" ? +$("bMaxImages").value || 0 : 0,
     start_text: [...$("bStart").querySelectorAll("input")].map((i) => i.value.trim()) });
   $("bMsg").textContent = "";
@@ -295,7 +296,10 @@ async function loadModels() {
     const tr = m.training;
     const td = tr?.data;
     const trainInfo = tr ? `<div class="small muted">${tr.epochs_done}/${tr.epochs} epochs · ${tr.tokens} token(s) per class`
-      + `${tr.best_val_ap50 != null ? ` · best val AP50 ${f3(tr.best_val_ap50)} (epoch ${tr.best_epoch})` : ""}</div>`
+      + (tr.focus ? ` · focus: ${FOCUS_LABELS[tr.focus] || esc(tr.focus)}` : "")
+      + `${tr.best_val_fbeta != null ? ` · best val F${tr.fbeta} ${f3(tr.best_val_fbeta)}`
+        : tr.best_val_ap50 != null ? ` · best val AP50 ${f3(tr.best_val_ap50)}` : ""}`
+      + `${tr.best_val_fbeta != null || tr.best_val_ap50 != null ? ` (epoch ${tr.best_epoch})` : ""}</div>`
       + `<div class="small muted">${trainDataLabel(td)}</div>`
       + `<div class="small muted">start: ${(o.start_text || m.class_names || []).map((s) => `“${esc(s)}”`).join(", ")}</div>` : "";
     const prompts = m.type === "text" && promptGroups(m).length
