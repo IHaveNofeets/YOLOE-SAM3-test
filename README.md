@@ -197,9 +197,9 @@ ignored).
 
 ## License
 
-This project is licensed under the Apache License 2.0, see [LICENSE](LICENSE).
+This project is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0), see
+[LICENSE](LICENSE), the same license as [Ultralytics](https://github.com/ultralytics/ultralytics), which
+both tools are built on.
 
-The containers install third-party software with licenses of their own, including
-[Ultralytics](https://github.com/ultralytics/ultralytics) (AGPL-3.0). The YOLOE and SAM 3 weights come
-under their own terms, and the SAM 3 weights under Meta's license, which you accept when you download
-them on Hugging Face.
+The YOLOE and SAM 3 weights come under their own terms, and the SAM 3 weights under Meta's license,
+which you accept when you download them on Hugging Face.
