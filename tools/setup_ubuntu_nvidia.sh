@@ -208,6 +208,7 @@ SERVICES=(batch-yoloe batch-sam3)
 COMPOSE=(sudo docker compose --project-directory "$REPO" -f "$REPO/compose.yaml" -f "$REPO/compose.gpu.yaml")
 if [ "$START" = 0 ]; then
   bold "7/8  Skipped (--no-start). Start later with:"
+  info "cd $REPO && docker compose -f compose.yaml -f compose.gpu.yaml run --rm wheels"
   info "cd $REPO && docker compose -f compose.yaml -f compose.gpu.yaml up -d --build ${SERVICES[*]}"
 else
   if [ "$NEED_REBOOT" = 1 ]; then
@@ -218,7 +219,9 @@ else
   info "checking that a container sees the GPU..."
   sudo docker run --rm --gpus all ubuntu:24.04 nvidia-smi -L | sed 's/^/   container: /' \
     || die "a container can't use the GPU; check 'nvidia-smi' on the host and 'sudo nvidia-ctk runtime configure --runtime=docker'"
-  bold "7/8  Building and starting ${SERVICES[*]} (the first build downloads several GB of CUDA PyTorch)"
+  bold "7/8  Downloading the Python packages into wheels/ (the first time several GB of CUDA PyTorch, then only what's new)"
+  "${COMPOSE[@]}" run --rm wheels
+  bold "7/8  Building and starting ${SERVICES[*]} (installs from wheels/, nothing is downloaded again)"
   "${COMPOSE[@]}" up -d --build "${SERVICES[@]}"
   info "waiting for them to answer..."
   for port in 7870 7871; do
@@ -273,3 +276,4 @@ if [ "$NEED_RELOGIN" = 1 ]; then
 fi
 bold "Done"
 info "Start / update later:  cd $REPO && docker compose -f compose.yaml -f compose.gpu.yaml up -d --build ${SERVICES[*]}"
+info "After a requirements.txt change, first:  docker compose -f compose.yaml -f compose.gpu.yaml run --rm wheels"

@@ -44,3 +44,7 @@ services:
     volumes:
       - ./dockers/batch-sam3/modelData/miopen:/app/modelData/miopen:rw
     environment: *rocm-env
+
+  wheels:
+    environment:
+      - TORCH_VARIANT=rocm7.2

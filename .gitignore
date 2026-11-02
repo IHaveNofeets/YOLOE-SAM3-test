@@ -8,3 +8,7 @@ __pycache__
 
 .vscode
 .vscode/*
+
+# Python packages for the images, downloaded once by tools/fetch_wheels.sh (docker compose run --rm wheels)
+wheels/*
+!wheels/.gitkeep

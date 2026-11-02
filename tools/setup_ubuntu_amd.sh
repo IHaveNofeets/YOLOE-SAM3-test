@@ -201,6 +201,7 @@ SERVICES=(batch-yoloe batch-sam3)
 COMPOSE=(sudo docker compose --project-directory "$REPO" -f "$REPO/compose.yaml" -f "$REPO/compose.amd.yaml")
 if [ "$START" = 0 ]; then
   bold "6/7  Skipped (--no-start). Start later with:"
+  info "cd $REPO && docker compose -f compose.yaml -f compose.amd.yaml run --rm wheels"
   info "cd $REPO && docker compose -f compose.yaml -f compose.amd.yaml up -d --build ${SERVICES[*]}"
 else
   if [ "$NEED_REBOOT" = 1 ]; then
@@ -209,7 +210,9 @@ else
     exit 0
   fi
   [ -e /dev/kfd ] || die "/dev/kfd still missing - reboot, or run again with --amdgpu-dkms"
-  bold "6/7  Building and starting ${SERVICES[*]} (the first build downloads ~5 GB of ROCm PyTorch)"
+  bold "6/7  Downloading the Python packages into wheels/ (the first time ~5 GB of ROCm PyTorch, then only what's new)"
+  "${COMPOSE[@]}" run --rm wheels
+  bold "6/7  Building and starting ${SERVICES[*]} (installs from wheels/, nothing is downloaded again)"
   "${COMPOSE[@]}" up -d --build "${SERVICES[@]}"
   info "waiting for them to answer..."
   for port in 7870 7871; do
@@ -257,3 +260,4 @@ if [ "$NEED_RELOGIN" = 1 ]; then
 fi
 bold "Done"
 info "Start / update later:  cd $REPO && docker compose -f compose.yaml -f compose.amd.yaml up -d --build ${SERVICES[*]}"
+info "After a requirements.txt change, first:  docker compose -f compose.yaml -f compose.amd.yaml run --rm wheels"

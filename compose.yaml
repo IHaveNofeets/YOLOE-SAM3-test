@@ -4,6 +4,8 @@ services:
   batch-yoloe:
     build:
       context: ./dockers/batch-yoloe
+      additional_contexts:
+        wheels: ./wheels  # the Python packages, downloaded once (see the wheels service below)
     ports:
       - "7870:7870"
     volumes:
@@ -30,6 +32,8 @@ services:
   batch-sam3:
     build:
       context: ./dockers/batch-sam3
+      additional_contexts:
+        wheels: ./wheels
     ports:
       - "7871:7871"
     volumes:
@@ -46,6 +50,21 @@ services:
       start_period: 60s
     networks:
       - yoloe-net
+
+  # Not a server: downloads every Python package both images need into ./wheels, once, so building them
+  # doesn't download anything again. Run it before building (only what's missing is downloaded):
+  #   docker compose run --rm wheels     (with -f compose.yaml -f compose.gpu.yaml / compose.amd.yaml for a GPU)
+  wheels:
+    image: python:3.14-slim
+    profiles: ["tools"]  # never started by "docker compose up"
+    environment:
+      - TORCH_VARIANT=cpu
+    volumes:
+      - ./wheels:/wheels:rw
+      - ./dockers/batch-yoloe/requirements.txt:/src/batch-yoloe/requirements.txt:ro
+      - ./dockers/batch-sam3/requirements.txt:/src/batch-sam3/requirements.txt:ro
+      - ./tools/fetch_wheels.sh:/fetch_wheels.sh:ro
+    command: ["sh", "/fetch_wheels.sh"]
 
 networks:
   yoloe-net:

@@ -30,3 +30,7 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+
+  wheels:
+    environment:
+      - TORCH_VARIANT=cu130

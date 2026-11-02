@@ -45,11 +45,26 @@ Needs Docker Desktop. The dataset is expected at `E:\Dataset`. To use another fo
 `DATASET_ROOT=D:/path/to/Dataset` in a `.env` file next to `compose.yaml`.
 
 ```bash
+docker compose run --rm wheels                       # downloads the Python packages into wheels/, once
 docker compose up -d --build batch-yoloe batch-sam3
 ```
 
 Then open http://localhost:7870 and http://localhost:7871. Start just one of them by naming only that
 service.
+
+#### Downloading only once
+
+All Python packages (PyTorch alone is several GB on a GPU) are downloaded into the `wheels/` folder by
+the `wheels` service, and the images are built from there with no internet. So rebuilding never downloads
+them again.
+
+- Run `docker compose run --rm wheels` again only after changing a `requirements.txt`. It downloads just
+  the new packages, and goes offline when nothing is missing.
+- For a GPU, add the same `-f` files as for `up`, e.g.
+  `docker compose -f compose.yaml -f compose.gpu.yaml run --rm wheels`. Each GPU type has its own
+  PyTorch, so the folder can hold several.
+- Without `wheels/`, a build still works, but it downloads everything itself, every time the packages
+  are installed again.
 
 Docker Desktop's memory limit matters: SAM 3 needs about 7 GB while loading. If containers get killed,
 give WSL more memory in `%UserProfile%\.wslconfig` (`[wsl2]` → `memory=11GB`).
@@ -67,7 +82,8 @@ bash tools/setup_ubuntu_nvidia.sh --dataset /path/to/Dataset   # NVIDIA
 bash tools/setup_ubuntu_amd.sh --dataset /path/to/Dataset      # AMD
 ```
 
-Both scripts install Docker, write `.env`, build and start both containers, and test the GPU inside
+Both scripts install Docker, write `.env`, download the Python packages into `wheels/` (see
+[Downloading only once](#downloading-only-once)), build and start both containers, and test the GPU inside
 them. If a script installs a driver, reboot and run it again. Both are safe to run again; use `--help`
 for the options.
 
@@ -186,7 +202,8 @@ dockers/batch-yoloe/      app.py (server, jobs, building, testing), train.py (fi
                           dataset.py, evaluate.py, static/ (the page)
 dockers/batch-sam3/       app.py, sam3_models.py (SAM 3 and the prompt kinds), prompt_tune.py,
                           dataset.py, evaluate.py, static/
-tools/                    setup_ubuntu_nvidia.sh, setup_ubuntu_amd.sh
+tools/                    setup_ubuntu_nvidia.sh, setup_ubuntu_amd.sh, fetch_wheels.sh (run by the wheels service)
+wheels/                   the downloaded Python packages (not in git)
 ```
 
 `dataset.py`, `evaluate.py` and `detect_utils.py` are the same in both containers. They are separate
