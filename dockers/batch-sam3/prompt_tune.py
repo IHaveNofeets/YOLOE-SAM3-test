@@ -78,7 +78,7 @@ def _polygon_points(obj):
 def _image_and_targets(ds, d, class_ids, include_uncompleted, include_covered):
     """(BGR image with left-out objects greyed, {model class index: [xyxy, ...]}, greyed?)."""
     truth = ds.truth(d)
-    img = cv2.imread(os.path.join(d, "org.png"))
+    img = cv2.imread(ds.image_path(d))
     keep, excluded = ds.split_objects(truth, class_ids, include_uncompleted, include_covered)
     for o in excluded:
         cv2.fillPoly(img, [p.round().astype(np.int32) for p in _polygon_points(o)], GREY)
@@ -168,10 +168,9 @@ def tune(args, log=print, progress=None, cancelled=None):
     text = engine.text_tokens(start_text)
     k = args["tokens"]
     init = torch.stack([t.mean(0) for t, _ in text])  # (C, 256)
-    gen = torch.Generator().manual_seed(args["seed"])
-    learned = torch.nn.Parameter(init[:, None, :].repeat(1, k, 1).cpu()
-                                 + 0.02 * init.std() * torch.randn(len(names), k, init.shape[-1], generator=gen))
-    learned.data = learned.data.to(dev)
+    gen = torch.Generator().manual_seed(args["seed"])  # on the CPU, so a seed gives the same start on any device
+    noise = torch.randn(len(names), k, init.shape[-1], generator=gen).to(dev)
+    learned = torch.nn.Parameter(init[:, None, :].repeat(1, k, 1) + 0.02 * init.std() * noise)
     opt = torch.optim.AdamW([learned], lr=args["lr"], weight_decay=0.0)
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
 

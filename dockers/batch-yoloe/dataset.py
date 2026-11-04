@@ -1,9 +1,17 @@
 """Reading the labelled dataset root (bind-mounted at /data):
 
-    <root>/{trainImages,testImages,refImages}/<dataset>/<image>/{org.png, truth.json}
+    <root>/{trainImages,testImages,refImages}/<dataset>/crop_offsets.json
+    <root>/{trainImages,testImages,refImages}/<dataset>/<image>/{crop.png, org.png, truth.json}
 
 truth.json: {image, width, height, objects: [{id, class, class_name, bbox: {x, y, w, h},
-polygons: [[[x, y], ...]], uncompleted, covered?, letter?}]}. Class ids are global across datasets.
+polygons: [[[x, y], ...]], uncompleted, covered?, letter?}]}, in org.png's pixels. Class ids are global
+across datasets.
+
+crop.png is org.png with x1 / x2 pixels cut off the left / right and y1 / y2 off the top / bottom
+(crop_offsets.json: {"OrgToCrop": {x1, x2, y1, y2}}). When a dataset has crop_offsets.json, its images are
+the crops and truth() returns the truth in crop pixels: boxes and polygons shifted and clipped to the
+crop, objects the crop cuts flagged uncompleted (cut off by the image edge), objects outside it dropped.
+A dataset without it uses org.png as it is.
 
 A model's *scope* is either one class in one dataset, {"type": "single", "dataset": ..., "class_id": n},
 or every class except "Other" in every dataset, {"type": "all"}.
@@ -14,6 +22,8 @@ import threading
 
 SPLITS = {"train": "trainImages", "test": "testImages", "ref": "refImages"}
 IMAGE_FILE = "org.png"
+CROP_FILE = "crop.png"
+OFFSETS_FILE = "crop_offsets.json"
 TRUTH_FILE = "truth.json"
 FLAGS = ("uncompleted", "covered")
 
@@ -32,11 +42,63 @@ def flags_of(obj):
     return (1 if obj.get("uncompleted") else 0) | (2 if obj.get("covered") else 0)
 
 
+def _clip_polygon(pts, w, h):
+    """The part of a polygon inside the rectangle 0..w x 0..h (Sutherland-Hodgman)."""
+    for inside, cut in ((lambda p: p[0] >= 0, lambda a, b: _cut_x(a, b, 0)),
+                        (lambda p: p[0] <= w, lambda a, b: _cut_x(a, b, w)),
+                        (lambda p: p[1] >= 0, lambda a, b: _cut_y(a, b, 0)),
+                        (lambda p: p[1] <= h, lambda a, b: _cut_y(a, b, h))):
+        out = []
+        for i, cur in enumerate(pts):
+            prev = pts[i - 1]
+            if inside(cur):
+                if not inside(prev):
+                    out.append(cut(prev, cur))
+                out.append(cur)
+            elif inside(prev):
+                out.append(cut(prev, cur))
+        pts = out
+        if not pts:
+            break
+    return pts
+
+
+def _cut_x(a, b, x):
+    t = (x - a[0]) / (b[0] - a[0])
+    return [x, a[1] + t * (b[1] - a[1])]
+
+
+def _cut_y(a, b, y):
+    t = (y - a[1]) / (b[1] - a[1])
+    return [a[0] + t * (b[0] - a[0]), y]
+
+
+def crop_truth(truth, off):
+    """truth.json (org.png pixels) -> the same in crop pixels, off = crop_offsets.json's OrgToCrop."""
+    dx, dy = off["x1"], off["y1"]
+    w, h = truth["width"] - off["x1"] - off["x2"], truth["height"] - off["y1"] - off["y2"]
+    objects = []
+    for o in truth.get("objects", []):
+        b = o["bbox"]
+        x1, y1, x2, y2 = b["x"] - dx, b["y"] - dy, b["x"] + b["w"] - dx, b["y"] + b["h"] - dy
+        cx1, cy1, cx2, cy2 = max(x1, 0), max(y1, 0), min(x2, w), min(y2, h)
+        if cx2 <= cx1 or cy2 <= cy1:
+            continue  # outside the crop
+        o = dict(o, bbox={"x": cx1, "y": cy1, "w": cx2 - cx1, "h": cy2 - cy1})
+        if (cx1, cy1, cx2, cy2) != (x1, y1, x2, y2):
+            o["uncompleted"] = True  # the crop cuts it
+        polys = (_clip_polygon([[px - dx, py - dy] for px, py in p], w, h) for p in o.get("polygons") or [])
+        o["polygons"] = [p for p in polys if len(p) >= 3]
+        objects.append(o)
+    return dict(truth, width=w, height=h, objects=objects)
+
+
 class Dataset:
     def __init__(self, root):
         self.root = root
         self._scan = None
         self._lock = threading.Lock()
+        self._offsets = {}  # dataset folder -> OrgToCrop, or None when it has no crop_offsets.json
 
     # ---------- files ----------
     def split_dir(self, split, dataset=None):
@@ -52,24 +114,45 @@ class Dataset:
         return sorted(names)
 
     def image_dirs(self, split, dataset):
-        """Image folders (with both org.png and truth.json) of one dataset in one split, sorted."""
+        """Image folders (with both the image and truth.json) of one dataset in one split, sorted."""
         d = self.split_dir(split, dataset)
         if not os.path.isdir(d):
             return []
+        image_file = IMAGE_FILE if self.crop_offsets(d) is None else CROP_FILE
         out = []
         for n in sorted(os.listdir(d)):
             p = os.path.join(d, n)
-            if os.path.isfile(os.path.join(p, IMAGE_FILE)) and os.path.isfile(os.path.join(p, TRUTH_FILE)):
+            if os.path.isfile(os.path.join(p, image_file)) and os.path.isfile(os.path.join(p, TRUTH_FILE)):
                 out.append(p)
         return out
 
     def rel(self, path):
         return os.path.relpath(path, self.root).replace(os.sep, "/")
 
-    @staticmethod
-    def truth(img_dir):
+    def crop_offsets(self, dataset_dir):
+        """The dataset folder's OrgToCrop offsets, or None when it has no crop_offsets.json."""
+        dataset_dir = os.path.normpath(dataset_dir)
+        if dataset_dir not in self._offsets:
+            path = os.path.join(dataset_dir, OFFSETS_FILE)
+            off = None
+            if os.path.isfile(path):
+                with open(path, encoding="utf-8") as f:
+                    o2c = json.load(f)["OrgToCrop"]
+                off = {k: int(o2c.get(k, 0)) for k in ("x1", "x2", "y1", "y2")}
+            self._offsets[dataset_dir] = off
+        return self._offsets[dataset_dir]
+
+    def image_path(self, img_dir):
+        """The image to use: crop.png when the dataset has crop_offsets.json, else org.png."""
+        off = self.crop_offsets(os.path.dirname(os.path.normpath(img_dir)))
+        return os.path.join(img_dir, IMAGE_FILE if off is None else CROP_FILE)
+
+    def truth(self, img_dir):
+        """truth.json, in the pixels of image_path() (see the module docstring)."""
         with open(os.path.join(img_dir, TRUTH_FILE), encoding="utf-8") as f:
-            return json.load(f)
+            truth = json.load(f)
+        off = self.crop_offsets(os.path.dirname(os.path.normpath(img_dir)))
+        return truth if off is None else crop_truth(truth, off)
 
     # ---------- overview ----------
     def scan(self, refresh=False):

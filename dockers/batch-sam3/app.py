@@ -540,10 +540,10 @@ def _build_exemplar(job, name, spec, class_ids, names, tmp_dir):
     for c, items in list(chosen.items()) + [(-1, negatives)]:
         for d, obj in items:
             if d not in images:
-                images[d] = cv2.imread(os.path.join(d, "org.png"))
+                images[d] = cv2.imread(DS.image_path(d))
             crops.append(sam3_models.crop_object(images[d], bbox_xyxy(obj)))
             cls.append(c)
-            r = refs_meta.setdefault(d, {"path": DS.rel(os.path.join(d, "org.png")), "bboxes": [], "cls": []})
+            r = refs_meta.setdefault(d, {"path": DS.rel(DS.image_path(d)), "bboxes": [], "cls": []})
             r["bboxes"].append([round(v, 1) for v in bbox_xyxy(obj)])
             r["cls"].append(c)
     panel, boxes = sam3_models.build_panel(crops)
@@ -573,13 +573,13 @@ def _build_visual(job, name, spec, class_ids, names, tmp_dir):
             if job.cancel.is_set():
                 raise prompt_tune.Cancelled()
             job.set(0.1 + 0.85 * k / len(refs), f"encoding reference image {k + 1}/{len(refs)}")
-            img = cv2.imread(os.path.join(d, "org.png"))
+            img = cv2.imread(DS.image_path(d))
             feats = e.features(img)
             cls = [model_idx[int(o["class"])] for o in keep]
             for c in sorted(set(cls)):
                 tok, _ = e.box_tokens(feats, img.shape, [bbox_xyxy(o) for o, k2 in zip(keep, cls) if k2 == c])
                 tokens[c].append(tok.cpu())
-            refs_meta.append({"path": DS.rel(os.path.join(d, "org.png")),
+            refs_meta.append({"path": DS.rel(DS.image_path(d)),
                               "bboxes": [[round(v, 1) for v in bbox_xyxy(o)] for o in keep], "cls": cls})
     missing = [names[c] for c, t in enumerate(tokens) if not t]
     if missing:
@@ -740,7 +740,7 @@ def _run_test(job, run_id, model_names, plans, max_images=0):
         if job.cancel.is_set():
             raise prompt_tune.Cancelled()
         truth = DS.truth(d)
-        path = os.path.join(d, "org.png")
+        path = DS.image_path(d)
         image = cv2.imread(path)
         h, w = image.shape[:2]
         rec = {"path": DS.rel(path), "width": w, "height": h, "results": {}, "model_ms": {}, "model_split_ms": {},

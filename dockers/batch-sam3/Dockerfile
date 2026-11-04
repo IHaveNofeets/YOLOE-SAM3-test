@@ -35,6 +35,11 @@ RUN --mount=type=bind,from=wheels,target=/wheels \
     && pip uninstall -y opencv-python opencv-python-headless \
     && inst opencv-python-headless==5.0.0.93
 
+# Triton (part of GPU PyTorch) compiles small helper programs the first time prompt tuning runs on a GPU,
+# which needs a C compiler. After the pip layer so adding it doesn't reinstall the packages.
+RUN apt-get update && apt-get install -y --no-install-recommends gcc \
+    && rm -rf /var/lib/apt/lists/*
+
 # The SAM 3 weights are not baked into the image: they are in this container's own
 # dockers/batch-sam3/modelData/sam3 mount. Built models persist in the models/ mount.
 COPY detect_utils.py dataset.py evaluate.py sam3_models.py prompt_tune.py app.py ./

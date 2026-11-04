@@ -18,9 +18,9 @@ Both tools read one dataset folder, mounted into the containers at `/data`:
 
 ```
 Dataset/
-├── trainImages/<dataset>/<image>/org.png + truth.json   for fine-tuning / prompt tuning
-├── testImages/<dataset>/<image>/org.png + truth.json    for testing (never used for building)
-├── refImages/<dataset>/<image>/org.png + truth.json     reference images for visual / exemplar prompts
+├── trainImages/<dataset>/<image>/crop.png + truth.json  for fine-tuning / prompt tuning
+├── testImages/<dataset>/<image>/crop.png + truth.json   for testing (never used for building)
+├── refImages/<dataset>/<image>/crop.png + truth.json    reference images for visual / exemplar prompts
 └── output/
     ├── YOLOE/<date>_<name>/                              test results of batch-yoloe
     └── SAM3/<date>_<name>/                               test results of batch-sam3
@@ -29,6 +29,17 @@ Dataset/
 `truth.json` lists the objects of an image: `{image, width, height, objects: [{id, class, class_name,
 bbox: {x, y, w, h}, polygons, uncompleted, covered?}]}`. Class ids are shared across datasets. The class
 "Other" is never used for building or scoring.
+
+**Crops:** the tools use `crop.png`, a crop of the camera image `org.png`. Each dataset folder has a
+`crop_offsets.json`, `{"OrgToCrop": {x1, x2, y1, y2}}`, giving the pixels cut off the left, right, top and
+bottom. `truth.json` stays in `org.png`'s pixels, and the tools move it onto the crop:
+
+- **Moved and clipped:** boxes and polygons are shifted, and clipped at the crop's edge.
+- **Flagged uncompleted:** an object the crop cuts gets the uncompleted flag, as it's now cut off by the
+  image edge.
+- **Dropped:** an object fully outside the crop is left out.
+
+A dataset without `crop_offsets.json` uses `org.png` as it is.
 
 Objects flagged **uncompleted** (cut off by the image edge) or **covered** (partly hidden) are left out
 when building a model, unless their checkbox is ticked. In training images they are greyed out, so the

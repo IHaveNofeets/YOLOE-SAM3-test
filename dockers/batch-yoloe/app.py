@@ -156,6 +156,15 @@ def _release_memory():
         ctypes.CDLL("libc.so.6").malloc_trim(0)
     except OSError:
         pass
+    if TORCH_GPU:
+        torch.cuda.empty_cache()
+
+
+def _unload_model(entry):
+    """Unload one model's ONNX model; it loads again the next time it is used."""
+    with entry["lock"]:
+        entry["model"] = None
+    _release_memory()
 
 
 def _unload_models():
@@ -648,7 +657,7 @@ def _build_visual(job, name, spec, class_ids, names, tmp_dir):
             continue
         cls = np.array([model_idx[int(o["class"])] for o in keep], dtype=np.int64)
         boxes = np.array([bbox_xyxy(o) for o in keep], dtype=np.float32)
-        path = os.path.join(d, "org.png")
+        path = DS.image_path(d)
         if use_masks:
             h, w = truth["height"], truth["width"]
             prompts = {"masks": np.stack([_polygon_mask(o, h, w) for o in keep]), "cls": cls}
@@ -884,30 +893,36 @@ def _run_test(job, run_id, model_names, plans, legacy_scope):
     job.say(f"{len(order)} test image(s), {total} model run(s)")
 
     per_model = {n: [] for n in model_names}  # for scoring: [{"dets", "gts"}]
-    out_images = []
+    recs, truths = {}, {}  # img dir -> its record in results.json (filled in model by model) / truth
     done = 0
-    for d in order:
-        if job.cancel.is_set():
-            raise train.Cancelled()
-        truth = DS.truth(d)
-        path = os.path.join(d, "org.png")
-        image_bytes = open(path, "rb").read()
-        image = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
-        h, w = image.shape[:2]
-        rec = {"path": DS.rel(path), "width": w, "height": h, "results": {}, "model_ms": {}, "model_split_ms": {},
-               "truth": [{"bbox": [round(v, 1) for v in bbox_xyxy(o)], "class_id": int(o["class"]),
-                          "name": o.get("class_name", all_names.get(int(o["class"]), "")),
-                          "uncompleted": bool(o.get("uncompleted")), "covered": bool(o.get("covered"))}
-                         for o in truth.get("objects", [])]}
-        for n in images[d]:
-            scope, class_ids, agnostic, entry, ext = plans[n]
+    # Model by model, each over all of its images and then unloaded: on a GPU every loaded ONNX model keeps
+    # its own memory pool, so a test of many models, all kept loaded, runs out of GPU memory.
+    for n in model_names:
+        scope, class_ids, agnostic, entry, ext = plans[n]
+        idx = {cid: i for i, cid in enumerate(class_ids)}
+        for d in order:
+            if n not in images[d]:
+                continue
+            if job.cancel.is_set():
+                raise train.Cancelled()
+            path = DS.image_path(d)
+            image_bytes = open(path, "rb").read()
+            image = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
+            if d not in recs:
+                truths[d] = truth = DS.truth(d)
+                h, w = image.shape[:2]
+                recs[d] = {"path": DS.rel(path), "width": w, "height": h, "results": {}, "model_ms": {}, "model_split_ms": {},
+                           "truth": [{"bbox": [round(v, 1) for v in bbox_xyxy(o)], "class_id": int(o["class"]),
+                                      "name": o.get("class_name", all_names.get(int(o["class"]), "")),
+                                      "uncompleted": bool(o.get("uncompleted")), "covered": bool(o.get("covered"))}
+                                     for o in truth.get("objects", [])]}
+            truth, rec = truths[d], recs[d]
             # accurate timing: one model at a time, nothing else running (the lock also holds off /api/detect)
             with _timing_lock:
                 if entry is not None:
                     dets, ms, split = _predict(entry, image, RAW_CONF)
                 else:
                     dets, ms, split = _ext_runner(ext)(image_bytes)
-            idx = {cid: i for i, cid in enumerate(class_ids)}
             gts = [(bbox_xyxy(o), idx[int(o["class"])], flags_of(o)) for o in DS.test_objects(truth, class_ids)]
             per_model[n].append({"dets": [(x["bbox"], x["conf"], x["cls"]) for x in dets], "gts": gts, "rec": rec, "raw": dets})
             rec["results"][n] = dets
@@ -916,7 +931,9 @@ def _run_test(job, run_id, model_names, plans, legacy_scope):
                 rec["model_split_ms"][n] = split
             done += 1
             job.set(0.95 * done / total, f"{done}/{total}: {n} on {rec['path'].split('/')[-2]}")
-        out_images.append(rec)
+        if entry is not None:
+            _unload_model(entry)
+    out_images = [recs[d] for d in order]
 
     job.set(0.96, "scoring")
     metrics_models, matches = [], {}

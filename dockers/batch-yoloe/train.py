@@ -135,7 +135,7 @@ def build_yolo_dataset(ds: Dataset, scope, class_ids, names, include_uncompleted
         w, h = truth["width"], truth["height"]
         keep, excluded = ds.split_objects(truth, class_ids, include_uncompleted, include_covered)
         stem = ds.rel(d).split("/", 1)[1].replace("/", "__")  # <dataset>__<image>
-        src = os.path.join(d, "org.png")
+        src = ds.image_path(d)
         if excluded:
             img = cv2.imread(src)
             for o in excluded:
