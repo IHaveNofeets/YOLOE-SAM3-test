@@ -205,6 +205,7 @@ async function onJobs(q) {
   queuedTargets = new Set([q.running, ...q.queued].filter((j) => j && j.kind === "build").map((j) => j.target));
   const pending = [...queuedTargets].filter((n) => !models.some((m) => m.name === n)).join(",");
   if (pending !== ($("tModels").dataset.pending || "")) renderTestModels();
+  renderRebuild();
   const busy = !!(q.running || q.queued.length);
   $("bBuild").textContent = busy ? "Add to queue" : "Build";
   $("tRun").textContent = busy ? "Add to queue" : "Run test";
@@ -287,7 +288,7 @@ async function loadModels() {
     const preview = m.type === "visual" ? `<img src="/api/models/${m.name}/preview?t=${encodeURIComponent(m.created)}" alt="">`
       : prompts || `<div class="mpreview mpf">${esc(KIND_LABELS[m.type] || m.type)}${m.engine ? `<br><span class="muted">${esc(m.engine)}</span>` : ""}</div>`;
     el.innerHTML = `${preview}
-      <b>${esc(m.name)}</b><span class="badge badge-${m.type}">${esc(KIND_LABELS[m.type] || m.type)}</span>${m.legacy ? ' <span class="badge">legacy</span>' : ""}
+      <b>${esc(m.name)}</b><span class="badge badge-${m.type}">${esc(KIND_LABELS[m.type] || m.type)}</span> ${m.outdated ? '<span class="badge badge-outdated" title="built from the images before they changed (org.png, before the crops): rebuild it">outdated</span>' : ""}${m.legacy ? ' <span class="badge">legacy</span>' : ""}
       <div class="small">${esc(m.scope_label || (m.legacy ? "no dataset scope" : ""))}</div>
       <div class="small muted">${m.class_names && m.num_classes <= 8 ? m.class_names.map(esc).join(", ") : `${m.num_classes} class(es)`}</div>
       ${flags}${trainInfo}
@@ -302,9 +303,37 @@ async function loadModels() {
     $("modelList").appendChild(el);
   }
   renderTestModels();
+  renderRebuild();
   if (!nameTouched && DS) $("bName").value = suggestName();
   $("bPrompts").dataset.key = ""; // refresh "copy prompts from"
   if (DS && $("bKind").value === "text") renderPromptEditor(scopeFromForm());
+}
+
+// models built from dataset images that have changed since (org.png, before the crops): one button
+// queues all their builds again, with the settings they were built with
+function outdatedModels() {
+  return models.filter((m) => m.outdated && !queuedTargets.has(m.name));
+}
+
+function renderRebuild() {
+  const n = outdatedModels().length;
+  $("mRebuild").hidden = !n;
+  $("mRebuild").textContent = `Rebuild ${n} outdated model(s)`;
+}
+
+async function rebuildOutdated() {
+  const names = outdatedModels().map((m) => m.name);
+  if (!names.length || !confirm(`Rebuild these ${names.length} model(s) from the current images, with the settings they were built with?\n`
+    + `Quick ones are queued first, fine-tunes last. Each replaces the old model when it is done.\n\n${names.join("\n")}`)) return;
+  $("mRebuildMsg").textContent = "";
+  try {
+    const r = await post("/api/models/rebuild", {});
+    $("mRebuildMsg").innerHTML = `<span class="ok">${r.queued.length} build(s) added to the queue</span>`
+      + (r.skipped.length ? ` <span class="err">not queued: ${r.skipped.map((s) => esc(`${s.name} (${s.reason})`)).join(", ")}</span>` : "");
+    pollJob();
+  } catch (e) {
+    $("mRebuildMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`;
+  }
 }
 
 // the test's model checkboxes: built models, plus models still waiting in the queue to be built
@@ -501,6 +530,7 @@ $("bMaxImages").oninput = $("bSeed").oninput = $("bSource").onchange = onFormCha
 $("bName").oninput = () => { nameTouched = true; };
 $("bCopyFrom").onchange = copyPrompts;
 $("bBuild").onclick = build;
+$("mRebuild").onclick = rebuildOutdated;
 $("tModels").onchange = onTestModelsChange;
 $("tRun").onclick = runTest;
 $("tPick").onchange = () => openTest($("tPick").value);

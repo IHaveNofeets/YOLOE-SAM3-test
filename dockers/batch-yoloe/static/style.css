@@ -142,3 +142,4 @@ select { font: inherit; padding: 4px 6px; border-radius: 5px; border: 1px solid 
 .qtable { border-collapse: collapse; font-size: 13px; }
 .qtable td { padding: 3px 10px 3px 0; border-bottom: 1px solid var(--border); }
 .qtable button { padding: 1px 7px; }
+.badge-outdated { border-color: var(--err); color: var(--err); }

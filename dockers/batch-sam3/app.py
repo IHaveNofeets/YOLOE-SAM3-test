@@ -128,7 +128,22 @@ def _runnable(name, meta):
 
 
 def _public_meta(meta):
-    return {**meta, "num_classes": len(meta.get("class_names", []))}
+    return {**meta, "num_classes": len(meta.get("class_names", [])), "outdated": _outdated(meta)}
+
+
+IMAGE_KINDS = ("exemplar", "visual", "prompt_tune")  # built from dataset images (text from words only)
+SLOW_KINDS = ("prompt_tune",)
+
+
+def _outdated(meta):
+    """A model built from dataset images that have changed since (e.g. org.png, before the crops).
+    Models built before meta.json recorded the images were built from org.png."""
+    if meta.get("type") not in IMAGE_KINDS or "scope" not in meta:
+        return False
+    try:
+        return meta.get("images", "org.png") != DS.scope_image_file(meta["scope"])
+    except ValueError:  # its dataset is gone
+        return False
 
 
 def _load_all():
@@ -628,21 +643,47 @@ BUILDERS = {"text": _build_text, "exemplar": _build_exemplar, "visual": _build_v
 def build_model():
     """Build a model from the dataset, as a background job.
     Body: {name, kind, scope, include_uncompleted, include_covered, options}."""
-    spec = request.get_json(force=True)
-    name = spec.get("name", "")
-    if not NAME_RE.match(name):
-        return jsonify(status="error", message="name must be 1-64 chars of A-Z a-z 0-9 _ -"), 400
-    kind = spec.get("kind")
-    if kind not in BUILDERS:
-        return jsonify(status="error", message=f"unknown kind '{kind}'"), 400
-    if not _dataset_available():
-        return jsonify(status="error", message=f"no dataset at {DATA_ROOT}"), 400
     try:
-        class_ids = DS.validate_scope(spec.get("scope"))
+        job = _queue_build(request.get_json(force=True))
+    except LookupError as e:
+        return jsonify(status="error", message=str(e)), 409
     except ValueError as e:
         return jsonify(status="error", message=str(e)), 400
+    return jsonify(status="ok", job=job.as_dict())
+
+
+@app.route("/api/models/rebuild", methods=["POST"])
+def rebuild_outdated():
+    """Queue every outdated model's build again, with the settings it was built with, quick kinds first."""
+    with _models_lock:
+        metas = [e["meta"] for e in _models.values() if _outdated(e["meta"])]
+    queued, skipped = [], []
+    for m in sorted(metas, key=lambda m: (m["type"] in SLOW_KINDS, m["name"])):
+        spec = {"name": m["name"], "kind": m["type"], "scope": m["scope"],
+                "include_uncompleted": m.get("include_uncompleted"), "include_covered": m.get("include_covered"),
+                "options": dict(m.get("options") or {})}
+        try:
+            _queue_build(spec)
+            queued.append(m["name"])
+        except (ValueError, LookupError) as e:
+            skipped.append({"name": m["name"], "reason": str(e)})
+    return jsonify(status="ok", queued=queued, skipped=skipped)
+
+
+def _queue_build(spec):
+    """Check a build spec and queue the build; returns the job. ValueError: the spec is invalid,
+    LookupError: a build of that name is already in the queue."""
+    name = spec.get("name", "")
+    if not NAME_RE.match(name):
+        raise ValueError("name must be 1-64 chars of A-Z a-z 0-9 _ -")
+    kind = spec.get("kind")
+    if kind not in BUILDERS:
+        raise ValueError(f"unknown kind '{kind}'")
+    if not _dataset_available():
+        raise ValueError(f"no dataset at {DATA_ROOT}")
+    class_ids = DS.validate_scope(spec.get("scope"))
     if name in _queued_builds():
-        return jsonify(status="error", message=f"a build of '{name}' is already in the queue"), 409
+        raise LookupError(f"a build of '{name}' is already in the queue")
     spec["include_uncompleted"] = bool(spec.get("include_uncompleted"))
     spec["include_covered"] = bool(spec.get("include_covered"))
     spec["options"] = spec.get("options") or {}
@@ -661,7 +702,7 @@ def build_model():
                 "scope_label": DS.describe_scope(spec["scope"], all_names),
                 "class_ids": class_ids, "class_names": names,
                 "include_uncompleted": spec["include_uncompleted"], "include_covered": spec["include_covered"],
-                "options": spec["options"], "created": _now(), **info,
+                "options": spec["options"], "images": DS.scope_image_file(spec["scope"]), "created": _now(), **info,
             }
             meta["build_seconds"] = round(time.perf_counter() - t0, 1)
             _save_model(name, meta, extra)
@@ -670,8 +711,7 @@ def build_model():
         job.say(f"done in {meta['build_seconds']} s")
         return {"model": _public_meta(meta)}
 
-    job = _enqueue("build", f"Build {name} ({KIND_LABELS[kind]}, {DS.describe_scope(spec['scope'], all_names)})", run, target=name)
-    return jsonify(status="ok", job=job.as_dict())
+    return _enqueue("build", f"Build {name} ({KIND_LABELS[kind]}, {DS.describe_scope(spec['scope'], all_names)})", run, target=name)
 
 
 # =====================================================================================================

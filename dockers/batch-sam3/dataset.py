@@ -147,6 +147,13 @@ class Dataset:
         off = self.crop_offsets(os.path.dirname(os.path.normpath(img_dir)))
         return os.path.join(img_dir, IMAGE_FILE if off is None else CROP_FILE)
 
+    def scope_image_file(self, scope):
+        """The image file a model of this scope is built from: crop.png or org.png ("+"-joined if its
+        datasets differ). Kept in a model's meta.json, to tell when the images have changed since."""
+        files = {IMAGE_FILE if self.crop_offsets(self.split_dir(s, ds)) is None else CROP_FILE
+                 for ds in self.scope_datasets(scope) for s in SPLITS if os.path.isdir(self.split_dir(s, ds))}
+        return "+".join(sorted(files)) or IMAGE_FILE
+
     def truth(self, img_dir):
         """truth.json, in the pixels of image_path() (see the module docstring)."""
         with open(os.path.join(img_dir, TRUTH_FILE), encoding="utf-8") as f:
