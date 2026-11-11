@@ -51,7 +51,34 @@ services:
     networks:
       - yoloe-net
 
-  # Not a server: downloads every Python package both images need into ./wheels, once, so building them
+  # Fine-tuning YOLO26 (the plain YOLO, not YOLOE) on the same dataset, tested the same way, on port 7872.
+  # The base weights (yolo26l-seg.pt etc.) are downloaded on first use into dockers/batch-yolo26/modelData/yolo26.
+  batch-yolo26:
+    build:
+      context: ./dockers/batch-yolo26
+      additional_contexts:
+        wheels: ./wheels
+    ports:
+      - "7872:7872"
+    volumes:
+      - ./dockers/batch-yolo26/modelData/yolo26:/app/modelData/yolo26:rw
+      - ./dockers/batch-yolo26/modelData/models:/app/models:rw
+      # the labelled dataset; only output/YOLO26/ is written to
+      - ${DATASET_ROOT:-E:/Dataset}:/data:rw
+    # fine-tuning's data loader workers share batches through /dev/shm (Docker's default 64 MB is too small)
+    shm_size: "2gb"
+    environment:
+      - MAX_PARALLEL=8
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:7872/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 60s
+    networks:
+      - yoloe-net
+
+  # Not a server: downloads every Python package the images need into ./wheels, once, so building them
   # doesn't download anything again. Run it before building (only what's missing is downloaded):
   #   docker compose run --rm wheels     (with -f compose.yaml -f compose.gpu.yaml / compose.amd.yaml for a GPU)
   wheels:
@@ -63,6 +90,7 @@ services:
       - ./wheels:/wheels:rw
       - ./dockers/batch-yoloe/requirements.txt:/src/batch-yoloe/requirements.txt:ro
       - ./dockers/batch-sam3/requirements.txt:/src/batch-sam3/requirements.txt:ro
+      - ./dockers/batch-yolo26/requirements.txt:/src/batch-yolo26/requirements.txt:ro
       - ./tools/fetch_wheels.sh:/fetch_wheels.sh:ro
     command: ["sh", "/fetch_wheels.sh"]
 

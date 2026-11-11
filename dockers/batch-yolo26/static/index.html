@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>YOLO26 Dataset</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header><h1>YOLO26 Dataset</h1><span id="serverInfo" class="muted"></span></header>
+
+<div id="jobBar" class="jobbar" hidden>
+  <div class="row">
+    <b id="jobTitle"></b>
+    <progress id="jobProgress" value="0" max="1"></progress>
+    <span id="jobMsg" class="muted small"></span>
+    <button id="jobCancel">Cancel</button>
+    <button id="jobLogToggle">Log</button>
+    <button id="jobQueueToggle">Queue</button>
+    <button id="jobHide" title="Hide until something new is added">✕</button>
+  </div>
+  <pre id="jobLog" hidden></pre>
+  <div id="jobQueue" class="jobqueue" hidden></div>
+</div>
+
+<section>
+  <h2>1. Dataset</h2>
+  <div id="dsInfo" class="muted">Loading…</div>
+  <div id="dsTable" class="scrollx"></div>
+</section>
+
+<section>
+  <h2>2. Fine-tune a model</h2>
+  <div class="form">
+    <div class="row">
+      <label>Name <input id="bName" type="text" size="28"></label>
+    </div>
+    <div class="row">
+      <label><input type="radio" name="bScope" value="single" checked> One class in one dataset</label>
+      <select id="bDataset"></select>
+      <select id="bClass"></select>
+      <label><input type="radio" name="bScope" value="all"> All classes (not "Other"), all datasets</label>
+    </div>
+    <div class="row" id="bFlagsRow">
+      <span class="muted">Use flagged objects for building:</span>
+      <label><input id="bIncU" type="checkbox"> include <b>uncompleted</b></label>
+      <label><input id="bIncC" type="checkbox"> include <b>covered</b></label>
+      <span class="muted small">(they are always part of the test ground truth)</span>
+    </div>
+
+    <div id="optFt" class="opts">
+      <div class="row">
+        <label title="The COCO-pretrained weights it starts from. -seg also learns the polygons (a little slower); the boxes are what is tested.">Base model <select id="bBase">
+          <option value="yolo26n">yolo26n</option><option value="yolo26n-seg">yolo26n-seg</option>
+          <option value="yolo26s">yolo26s</option><option value="yolo26s-seg">yolo26s-seg</option>
+          <option value="yolo26m">yolo26m</option><option value="yolo26m-seg">yolo26m-seg</option>
+          <option value="yolo26l">yolo26l</option><option value="yolo26l-seg" selected>yolo26l-seg</option>
+          <option value="yolo26x">yolo26x</option><option value="yolo26x-seg">yolo26x-seg</option></select></label>
+        <label>Method <select id="bMethod">
+          <option value="full">Full fine-tune: train all layers</option>
+          <option value="head">Head only: the backbone is frozen (faster)</option></select></label>
+        <label>Epochs <input id="bEpochs" type="number" min="1" max="500" value="50"></label>
+        <label>Image size <input id="bImgsz" type="number" min="160" max="1600" step="32" value="640"></label>
+        <label>Batch <input id="bBatch" type="number" min="1" max="64" value="4"></label>
+        <label>Patience <input id="bPatience" type="number" min="1" max="500" value="20"></label>
+      </div>
+      <div class="row">
+        <label title="Fewer false positives: wrong detections cost twice as much in training, and the epoch with the best F0.5 (precision counts more) is kept. Fewer false negatives: missed objects cost twice as much, best F2 (recall counts more).">
+          Focus <select id="bFocus">
+          <option value="fp" selected>fewer false positives (wrong detections)</option>
+          <option value="balanced">balanced</option>
+          <option value="fn">fewer false negatives (missed objects)</option></select></label>
+      </div>
+      <div class="row">
+        <label>Training data <select id="bSource">
+          <option value="train">trainImages: a number of them (+ seed)</option>
+          <option value="all">trainImages: all of them</option>
+          <option value="ref">refImages: all of them</option></select></label>
+        <label id="bCountRow">Train images <input id="bMaxImages" type="number" min="1" step="1" value="100" size="7"></label>
+        <label id="bSeedRow">Seed <input id="bSeed" type="number" min="0" step="1" value="0" size="5"></label>
+        <span id="bSeedHint" class="muted small"></span>
+      </div>
+      <div id="bTrainInfo" class="muted small"></div>
+    </div>
+    <div class="row"><button id="bBuild" class="primary">Train</button><span id="bMsg" class="small"></span></div>
+  </div>
+</section>
+
+<section>
+  <div class="row"><h2>3. Models</h2>
+    <a class="btn" href="/api/models/download.zip" download title="Every model: its training summary plus meta.json">Download all (.zip)</a>
+    <button id="mRebuild" hidden title="Models built from dataset images that have changed since (org.png, before the crops)"></button><span id="mRebuildMsg" class="small"></span></div>
+  <div id="modelList" class="models"></div>
+</section>
+
+<section>
+  <h2>4. Test</h2>
+  <p class="muted small">Each model runs on the test images of its own scope (one dataset for a one-class model, every dataset for all classes),
+    one model at a time so the times are real. All detections are kept, so the confidence is chosen afterwards with the slider.
+    Results go to <code>output/YOLO26/</code> in the dataset root.</p>
+  <div class="row"><span>Models:</span><span id="tModels" class="checks"></span></div>
+  <div class="row">
+    <label>Name <input id="tName" type="text" size="24" placeholder="optional"></label>
+    <button id="tRun" class="primary">Run test</button><span id="tMsg" class="small"></span>
+  </div>
+
+  <h3>Results</h3>
+  <div class="row">
+    <label>Test <select id="tPick"></select></label>
+    <a id="tCsv" class="btn" href="#" download>metrics.csv</a>
+    <button id="tDelete">Delete test</button>
+  </div>
+  <div id="tBody" hidden>
+    <div class="row slider">
+      <label>Confidence <input id="tConf" type="range" min="0.01" max="0.99" step="0.01" value="0.25"></label>
+      <b id="tConfVal">0.25</b>
+      <span class="muted small">P / R / F1, counts and flagged recall are recomputed live; the images below follow too.</span>
+    </div>
+    <div id="tTable" class="scrollx"></div>
+    <div id="tCharts" class="charts"></div>
+    <div id="tInfo" class="muted small"></div>
+  </div>
+</section>
+
+<section>
+  <h2>5. Images</h2>
+  <div class="row"><span id="viewerInfo" class="muted">Open a test above</span></div>
+  <div id="viewerBody" hidden>
+    <div class="row">
+      <label>Min conf <input id="vConf" type="number" min="0" max="1" step="0.01" value="0.25"></label>
+      <label>Filter <input id="vFilter" type="text" placeholder="path contains…" size="18"></label>
+      <label>Sort <select id="vSort"><option value="path">Path</option><option value="conf">Best conf</option><option value="model">Best match</option><option value="count">Most detections</option></select></label>
+      <label><input id="vOnlyHits" type="checkbox"> Only images with a detection</label>
+      <label><input id="vTruth" type="checkbox" checked> Show ground truth</label>
+      <label><input id="vTpFp" type="checkbox"> Colour by TP / FP</label>
+    </div>
+    <div class="row vfilter"><span>Models:</span><span id="vModels"></span></div>
+    <div id="vSummary"></div>
+    <div id="vGrid" class="vgrid"></div>
+  </div>
+</section>
+
+<div id="vModal" class="modal" hidden>
+  <div class="modal-box">
+    <div class="row modal-head">
+      <button id="vPrev">◀</button><button id="vNext">▶</button>
+      <b id="vModalTitle"></b>
+      <button id="vClose" class="close">✕</button>
+    </div>
+    <div class="modal-content">
+      <canvas id="vModalCanvas"></canvas>
+      <div id="vModalDets"></div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+<script src="/static/viewer.js"></script>
+</body>
+</html>

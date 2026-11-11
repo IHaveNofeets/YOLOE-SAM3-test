@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Set up an Ubuntu PC with an AMD Radeon GPU to run the batch-yoloe and batch-sam3 containers on the GPU.
+# Set up an Ubuntu PC with an AMD Radeon GPU to run the batch-yoloe, batch-sam3 and batch-yolo26 containers on the GPU.
 #
 #   bash tools/setup_ubuntu_amd.sh --dataset /path/to/Dataset
 #
@@ -12,7 +12,7 @@
 #   5. writes .env next to compose.yaml: DATASET_ROOT, the render / video group ids, and
 #      HSA_OVERRIDE_GFX_VERSION when the GPU needs it (e.g. RX 6750 XT = gfx1031 -> 10.3.0);
 #      checks that SAM 3's weights are in dockers/batch-sam3/modelData/sam3 (copy sam3.pt there yourself)
-#   6. builds and starts batch-yoloe (port 7870) and batch-sam3 (port 7871) with compose.amd.yaml
+#   6. builds and starts batch-yoloe (port 7870), batch-sam3 (7871) and batch-yolo26 (7872) with compose.amd.yaml
 #   7. checks that PyTorch inside both containers sees the GPU and can compute on it
 #
 # Options:
@@ -197,7 +197,7 @@ else
 fi
 
 # ----------------------------------------------------------------------------- 6. build + start
-SERVICES=(batch-yoloe batch-sam3)
+SERVICES=(batch-yoloe batch-sam3 batch-yolo26)
 COMPOSE=(sudo docker compose --project-directory "$REPO" -f "$REPO/compose.yaml" -f "$REPO/compose.amd.yaml")
 if [ "$START" = 0 ]; then
   bold "6/7  Skipped (--no-start). Start later with:"
@@ -215,7 +215,7 @@ else
   bold "6/7  Building and starting ${SERVICES[*]} (installs from wheels/, nothing is downloaded again)"
   "${COMPOSE[@]}" up -d --build "${SERVICES[@]}"
   info "waiting for them to answer..."
-  for port in 7870 7871; do
+  for port in 7870 7871 7872; do
     # any HTTP answer counts as started (batch-sam3's /health says 503 while its weights are missing)
     for _ in $(seq 1 120); do
       curl -s -o /dev/null http://localhost:$port/health && break
@@ -247,10 +247,10 @@ print('   a test computation on the GPU worked')
       warn "in $ENV_FILE, and the container log (${COMPOSE[*]} logs $svc). It runs on the CPU meanwhile."
     fi
   done
-  for port in 7870 7871; do
+  for port in 7870 7871 7872; do
     curl -s http://localhost:$port/api/models | grep -o '"device":"[^"]*"' | sed "s/^/   :$port reports /" || true
   done
-  info "open http://localhost:7870 (YOLOE) and http://localhost:7871 (SAM 3)"
+  info "open http://localhost:7870 (YOLOE), http://localhost:7871 (SAM 3) and http://localhost:7872 (YOLO26)"
   [ "$SAM3_OK" = 1 ] || warn "batch-sam3 still needs sam3.pt in $(dirname "$SAM3_PT")/"
 fi
 

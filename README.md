@@ -1,13 +1,14 @@
-# YOLOE / SAM 3 dataset tools
+# YOLOE / SAM 3 / YOLO26 dataset tools
 
-Two web tools, each running in its own Docker container, that build object detectors from a labelled
-dataset, test them on held-out images and compare the results. Both use the same dataset, the same
-scoring, and write their results in the same format, so YOLOE and SAM 3 can be compared directly.
+Three web tools, each running in its own Docker container, that build object detectors from a labelled
+dataset, test them on held-out images and compare the results. All use the same dataset, the same
+scoring, and write their results in the same format, so YOLOE, SAM 3 and YOLO26 can be compared directly.
 
 | Container | Port | Model | Kinds of model it builds |
 |---|---|---|---|
 | `batch-yoloe` | [7870](http://localhost:7870) | YOLOE (Ultralytics, ONNX) | visual prompt, text prompt, prompt-free, fine-tune |
 | `batch-sam3` | [7871](http://localhost:7871) | SAM 3 (Meta, via Ultralytics) | text prompt, exemplar prompt, visual prompt, prompt tuning |
+| `batch-yolo26` | [7872](http://localhost:7872) | YOLO26 (Ultralytics, ONNX) | fine-tune only (no prompts) |
 
 Both run on CPU, an NVIDIA GPU or (on Linux) an AMD GPU. SAM 3 is slow on a CPU (about 35–40 s per
 image), so test and train it on a GPU where possible.
@@ -18,12 +19,13 @@ Both tools read one dataset folder, mounted into the containers at `/data`:
 
 ```
 Dataset/
-├── trainImages/<dataset>/<image>/crop.png + truth.json  for fine-tuning / prompt tuning
+├── trainImages/<dataset>/<image>/crop.png + truth.json  for fine-tuning / prompt tuning (all three)
 ├── testImages/<dataset>/<image>/crop.png + truth.json   for testing (never used for building)
 ├── refImages/<dataset>/<image>/crop.png + truth.json    reference images for visual / exemplar prompts
 └── output/
     ├── YOLOE/<date>_<name>/                              test results of batch-yoloe
-    └── SAM3/<date>_<name>/                               test results of batch-sam3
+    ├── SAM3/<date>_<name>/                               test results of batch-sam3
+    └── YOLO26/<date>_<name>/                             test results of batch-yolo26
 ```
 
 `truth.json` lists the objects of an image: `{image, width, height, objects: [{id, class, class_name,
@@ -46,7 +48,7 @@ when building a model, unless their checkbox is ticked. In training images they 
 model is neither taught them nor punished for finding them. They are **always** part of the test ground
 truth, and the results show the recall on them separately.
 
-The tools only ever write to `output/YOLOE/` and `output/SAM3/`.
+The tools only ever write to `output/YOLOE/`, `output/SAM3/` and `output/YOLO26/`.
 
 ## Getting started
 
@@ -57,10 +59,10 @@ Needs Docker Desktop. The dataset is expected at `E:\Dataset`. To use another fo
 
 ```bash
 docker compose run --rm wheels                       # downloads the Python packages into wheels/, once
-docker compose up -d --build batch-yoloe batch-sam3
+docker compose up -d --build batch-yoloe batch-sam3 batch-yolo26
 ```
 
-Then open http://localhost:7870 and http://localhost:7871. Start just one of them by naming only that
+Then open http://localhost:7870, http://localhost:7871 and http://localhost:7872. Start just one of them by naming only that
 service.
 
 #### Downloading only once
@@ -142,6 +144,16 @@ Both pages work the same way, from top to bottom.
 | Prompt-free | nothing | built-in vocabulary; scored class-agnostically ("is there an object") |
 | Fine-tune | trainImages (or refImages) | *linear probe* trains only the class layer (fast); *full* trains everything |
 
+**batch-yolo26** builds one kind of model, a fine-tune. It is YOLO26, the plain detector YOLOE is built
+on, so there are no prompts: every model is trained on the dataset's classes, starting from the
+COCO-pretrained weights (downloaded on first use into `dockers/batch-yolo26/modelData/yolo26`).
+
+| Option | Notes |
+|---|---|
+| Base model | `yolo26n` / `s` / `m` / `l` / `x`; the `-seg` versions also learn the polygons (default `yolo26l-seg`, like YOLOE's) |
+| Method | *full* trains all layers; *head only* freezes the backbone (faster, less to unlearn with few images) |
+| Training data, focus, flags | as for YOLOE's fine-tune (below) |
+
 **batch-sam3**
 
 | Kind | Made from | Notes |
@@ -177,7 +189,7 @@ itself learns.
 
 ## Test output
 
-Each test writes a folder `output/YOLOE/<date>_<name>/` or `output/SAM3/<date>_<name>/`:
+Each test writes a folder `output/YOLOE/<date>_<name>/`, `output/SAM3/<date>_<name>/` or `output/YOLO26/<date>_<name>/`:
 
 | File | Contents |
 |---|---|
@@ -194,7 +206,7 @@ Each test writes a folder `output/YOLOE/<date>_<name>/` or `output/SAM3/<date>_<
 
 ## Other programs
 
-Both containers also take single images over HTTP:
+All containers also take single images over HTTP (same on port 7871 and 7872):
 
 ```bash
 curl -F image=@photo.png -F models=model_a,model_b -F conf=0.25 http://localhost:7870/api/detect
@@ -206,19 +218,20 @@ its time in ms.
 ## Project layout
 
 ```
-compose.yaml              both services (CPU)
+compose.yaml              the services (CPU)
 compose.gpu.yaml          NVIDIA override:  docker compose -f compose.yaml -f compose.gpu.yaml up -d --build
 compose.amd.yaml          AMD override (Linux only, needs .env from setup_ubuntu_amd.sh)
 dockers/batch-yoloe/      app.py (server, jobs, building, testing), train.py (fine-tuning), yoloe_bake.py,
                           dataset.py, evaluate.py, static/ (the page)
 dockers/batch-sam3/       app.py, sam3_models.py (SAM 3 and the prompt kinds), prompt_tune.py,
                           dataset.py, evaluate.py, static/
+dockers/batch-yolo26/     like batch-yoloe, without the prompt kinds: app.py, train.py, dataset.py, evaluate.py, static/
 tools/                    setup_ubuntu_nvidia.sh, setup_ubuntu_amd.sh, fetch_wheels.sh (run by the wheels service)
 wheels/                   the downloaded Python packages (not in git)
 ```
 
-`dataset.py`, `evaluate.py` and `detect_utils.py` are the same in both containers. They are separate
-copies, so change both.
+`dataset.py`, `evaluate.py` and `detect_utils.py` are the same in all three containers (and the
+scoring and queue code in `app.py` is shared in spirit). They are separate copies, so change all of them.
 
 Built models are kept in `dockers/<container>/modelData/models/` and are not in git (`modelData/` is
 ignored).

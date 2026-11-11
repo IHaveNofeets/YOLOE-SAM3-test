@@ -1,5 +1,5 @@
 #!/bin/sh
-# Downloads every Python package (wheel) that batch-yoloe and batch-sam3 need into the repo's wheels/
+# Downloads every Python package (wheel) that batch-yoloe, batch-sam3 and batch-yolo26 need into the repo's wheels/
 # folder, for one PyTorch build. The Dockerfiles install from that folder, so rebuilding the images
 # downloads nothing. Runs in a container through compose (TORCH_VARIANT comes from the compose files):
 #
@@ -35,6 +35,6 @@ echo "== the rest"
 EXTRA=""
 case "$V" in cu*) EXTRA="onnxruntime-gpu==1.29.0";; esac
 # shellcheck disable=SC2086
-fetch -c constraints.txt -r /src/batch-yoloe/requirements.txt -r /src/batch-sam3/requirements.txt clip $EXTRA
+fetch -c constraints.txt -r /src/batch-yoloe/requirements.txt -r /src/batch-sam3/requirements.txt -r /src/batch-yolo26/requirements.txt clip $EXTRA
 
 echo "done: $(ls /wheels | wc -l) files, $(du -sh /wheels | cut -f1) in wheels/"

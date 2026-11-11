@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Set up an Ubuntu PC with an NVIDIA GPU to run the batch-yoloe and batch-sam3 containers on the GPU.
+# Set up an Ubuntu PC with an NVIDIA GPU to run the batch-yoloe, batch-sam3 and batch-yolo26 containers on the GPU.
 #
 #   bash tools/setup_ubuntu_nvidia.sh --dataset /path/to/Dataset
 #
@@ -13,7 +13,7 @@
 #   5. adds you to the docker group
 #   6. writes DATASET_ROOT into .env next to compose.yaml; checks that SAM 3's weights are
 #      in dockers/batch-sam3/modelData/sam3 (copy sam3.pt there yourself)
-#   7. builds and starts batch-yoloe (port 7870) and batch-sam3 (port 7871) with compose.gpu.yaml
+#   7. builds and starts batch-yoloe (port 7870), batch-sam3 (7871) and batch-yolo26 (7872) with compose.gpu.yaml
 #   8. checks that PyTorch (and batch-yoloe's ONNX Runtime) inside the containers can compute on the GPU
 #
 # Options:
@@ -204,7 +204,7 @@ else
 fi
 
 # ----------------------------------------------------------------------------- 7. build + start
-SERVICES=(batch-yoloe batch-sam3)
+SERVICES=(batch-yoloe batch-sam3 batch-yolo26)
 COMPOSE=(sudo docker compose --project-directory "$REPO" -f "$REPO/compose.yaml" -f "$REPO/compose.gpu.yaml")
 if [ "$START" = 0 ]; then
   bold "7/8  Skipped (--no-start). Start later with:"
@@ -224,7 +224,7 @@ else
   bold "7/8  Building and starting ${SERVICES[*]} (installs from wheels/, nothing is downloaded again)"
   "${COMPOSE[@]}" up -d --build "${SERVICES[@]}"
   info "waiting for them to answer..."
-  for port in 7870 7871; do
+  for port in 7870 7871 7872; do
     # any HTTP answer counts as started (batch-sam3's /health says 503 while its weights are missing)
     for _ in $(seq 1 120); do
       curl -s -o /dev/null http://localhost:$port/health && break
@@ -263,10 +263,10 @@ sys.exit(0 if gpu else 2)
       warn "(${COMPOSE[*]} logs $svc). It runs on the CPU meanwhile."
     fi
   done
-  for port in 7870 7871; do
+  for port in 7870 7871 7872; do
     curl -s http://localhost:$port/api/models | grep -o '"device":"[^"]*"' | sed "s/^/   :$port reports /" || true
   done
-  info "open http://localhost:7870 (YOLOE) and http://localhost:7871 (SAM 3)"
+  info "open http://localhost:7870 (YOLOE), http://localhost:7871 (SAM 3) and http://localhost:7872 (YOLO26)"
   [ "$SAM3_OK" = 1 ] || warn "batch-sam3 still needs sam3.pt in $(dirname "$SAM3_PT")/"
 fi
 
